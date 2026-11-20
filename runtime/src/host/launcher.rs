@@ -253,7 +253,7 @@ impl Sdl {
             }
             init(INIT_GAMEPAD);
             let create_window: unsafe extern "C" fn(*const c_char, c_int, c_int, u64) -> Pointer = symbol(library, "SDL_CreateWindow");
-            let title = CString::new(format!("{} {} - Launcher", game.title, game.version)).unwrap();
+            let title = CString::new(format!("{} - Rust - {} - Launcher", game.title, game.version)).unwrap();
             let primary: unsafe extern "C" fn() -> u32 = symbol(library, "SDL_GetPrimaryDisplay");
             let usable_bounds: unsafe extern "C" fn(u32, *mut [c_int; 4]) -> bool = symbol(library, "SDL_GetDisplayUsableBounds");
             let mut bounds = [0; 4];
@@ -458,14 +458,20 @@ impl Sdl {
 
     /// The title's band at the top: plain text, or a metal bar with hazard
     /// stripes at both ends and the accent along its bottom.
+    /// The line reads `TITLE - RUST - version` in every port.
     fn header(&self, title: &str, version: &str) {
         let theme = theme();
+        let rest = format!(" - RUST - {version}");
+        let width = (title.len() + rest.len()) as f32 * CHARACTER;
+        let left = (WIDTH - width) / 2.0;
         if theme.metal {
             let bar = [0.0, 4.0, WIDTH, 22.0];
             self.plate(bar, theme.panel);
             self.line(0.0, 25.0, WIDTH, 25.0, theme.border);
-            // Diagonal stripes in the accent colour, 30 pixels at each end.
-            for (left, right) in [(2.0f32, 32.0f32), (WIDTH - 32.0, WIDTH - 2.0)] {
+            // Diagonal stripes in the accent colour, up to 30 pixels at each
+            // end, shorter when a long title needs the room.
+            let reach = (left - 6.0).clamp(0.0, 30.0);
+            for (left, right) in [(2.0f32, 2.0 + reach), (WIDTH - 2.0 - reach, WIDTH - 2.0)] {
                 let mut x = left;
                 while x < right {
                     for step in 0..18 {
@@ -478,16 +484,8 @@ impl Sdl {
                 }
             }
         }
-        if theme.metal {
-            // The stripes take the ends, so the version goes beside the title.
-            let width = (title.len() + 1 + version.len()) as f32 * CHARACTER;
-            let left = (WIDTH - width) / 2.0;
-            self.write(left, 12.0, title, theme.value);
-            self.write(left + (title.len() + 1) as f32 * CHARACTER, 12.0, version, theme.dim);
-        } else {
-            self.write((WIDTH - title.len() as f32 * CHARACTER) / 2.0, 12.0, title, theme.value);
-            self.write_right(12.0, version, theme.dim);
-        }
+        self.write(left, 12.0, title, theme.value);
+        self.write(left + title.len() as f32 * CHARACTER, 12.0, &rest, theme.dim);
     }
 
     /// A raised metal plate: lit at the top and left, shadowed at the other

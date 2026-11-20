@@ -1,3 +1,16 @@
+## The launcher
+
+![The launcher](release/launcher.png)
+
+The launcher opens before the game. Your choices are saved in `settings.ini` beside the program (beside the `.AppImage` file on Linux), and `--play` on the command line skips the launcher.
+
+- **Game files**: where your copy of the game is. Click *Choose folder...* or press Enter to pick a folder, or drop a folder or disc image onto the window. The line below it says which version was found, or what's missing.
+- **Choose a disc image or game file**: pick a disc image (`.iso`, `.bin`, `.img`, `.mdf`, `.cue`, `.ccd`) or any file of the game.
+- **Display**: *Window* or *Fullscreen*.
+- **Start game** and **Quit**.
+
+The launcher works with the mouse, the keyboard (arrow keys to choose and change, Enter to confirm, Escape to quit) and a controller (d-pad to choose and change, A to confirm, Start to start the game, B to quit).
+
 ## Supported versions
 
 Z came as two programs: the Windows 95 release (`WINZ.EXE`) and the DOS release (`ZED.EXE`). The port carries both, and each plays as its own program, the way it did on its own system. It checks the one it starts by SHA-256:

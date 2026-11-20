@@ -146,11 +146,11 @@ fn write_crate(game: &str, info: &Info, modules: &[Module], programs: &[Program]
     for name in ["icon.ico", "icon.rgba", "icon.png"] {
         std::fs::copy(Path::new("/port").join(name), root.join(name))?;
     }
-    write_if_changed(&root.join("icon.rc"), "1 ICON \"icon.ico\"\n")?;
     write_if_changed(&root.join("build.rs"), BUILD_SCRIPT)?;
 
     let version = std::env::var("RECOMP_VERSION").ok().filter(|v| !v.trim().is_empty()).unwrap_or("0.1".into());
     let version = version.trim();
+    write_if_changed(&root.join("icon.rc"), &resources(game, &info.title, version))?;
     write_if_changed(&root.join("VERSION"), &format!("{version}\n"))?;
     let semver = cargo_version(version);
     let program_crates: String = programs.iter().map(|p| format!("{game}-code-{0} = {{ path = \"programs/{0}\" }}\n", p.slug)).collect();
@@ -176,6 +176,52 @@ fn write_crate(game: &str, info: &Info, modules: &[Module], programs: &[Program]
         registry(), std::env::var("RECOMP_CD").unwrap_or_default(), std::env::var("RECOMP_THEME").unwrap_or_default()
     );
     write_if_changed(&source.join("main.rs"), &main)
+}
+
+/// The Windows resources linked into the exe: the icon, and version information
+/// (name, version, where it comes from), which Windows shows in the file's
+/// Properties and which virus scanners look for. An exe without it looks anonymous.
+fn resources(game: &str, title: &str, version: &str) -> String {
+    let quote = |text: &str| text.replace('"', "\"\"");
+    let numbers: Vec<u16> = version.split('-').next().unwrap_or("0").split('.').map(|n| n.parse().unwrap_or(0)).chain(std::iter::repeat(0)).take(4).collect();
+    let numbers = numbers.iter().map(u16::to_string).collect::<Vec<_>>().join(",");
+    let repo = std::env::var("RECOMP_REPO").ok().map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
+    let company = repo.as_deref().and_then(|r| r.split('/').next()).unwrap_or("Rust recompilation");
+    let comments = repo.as_deref().map_or(String::new(), |r| format!("\n      VALUE \"Comments\", \"https://github.com/{r}\""));
+    let name = quote(&format!("{title} - Rust"));
+    format!(
+        r#"1 ICON "icon.ico"
+
+1 VERSIONINFO
+FILEVERSION {numbers}
+PRODUCTVERSION {numbers}
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "{company}"
+      VALUE "FileDescription", "{name}"
+      VALUE "ProductName", "{name}"
+      VALUE "FileVersion", "{version}"
+      VALUE "ProductVersion", "{version}"
+      VALUE "InternalName", "{game}-rust"
+      VALUE "OriginalFilename", "{game}-rust.exe"
+      VALUE "LegalCopyright", "{legal}"{comments}
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
+"#,
+        company = quote(company),
+        version = quote(version),
+        legal = quote(&format!("Port: see LICENSE. {title} belongs to its rights holders; no game data is included.")),
+    )
 }
 
 /// Cargo wants three numbers, so `0.5-beta` becomes `0.5.0-beta`.

@@ -1,10 +1,23 @@
 # Z, recompiled
 
-A native Windows and Linux version of Z, made by translating the game's original programs statically into Rust, on a new runtime built on SDL3. The version is in `VERSION`, and releases are at https://github.com/<owner>/<repo>/releases.
+A native Windows and Linux version of Z, made by translating the game's original programs statically into Rust, on a new runtime built on SDL3. The version is in `VERSION`, and releases are at https://github.com/retro-gaming-tools/z-rust/releases.
 
 The coding was done by AI (Claude, by Anthropic). The testing was done by a human.
 
 **No game data is included.** You need Z by the Bitmap Brothers: the Windows 95 release (WINZ.EXE dated 1998-03-02) or the German or English DOS release (the Steam release isn't supported). The program reads the game's files from your copy when it starts, and checks every program file by SHA-256 before it runs.
+
+## The launcher
+
+![The launcher](release/launcher.png)
+
+The launcher opens before the game. Your choices are saved in `settings.ini` beside the program (beside the `.AppImage` file on Linux), and `--play` on the command line skips the launcher.
+
+- **Game files**: where your copy of the game is. Click *Choose folder...* or press Enter to pick a folder, or drop a folder or disc image onto the window. The line below it says which version was found, or what's missing.
+- **Choose a disc image or game file**: pick a disc image (`.iso`, `.bin`, `.img`, `.mdf`, `.cue`, `.ccd`) or any file of the game.
+- **Display**: *Window* or *Fullscreen*.
+- **Start game** and **Quit**.
+
+The launcher works with the mouse, the keyboard (arrow keys to choose and change, Enter to confirm, Escape to quit) and a controller (d-pad to choose and change, A to confirm, Start to start the game, B to quit).
 
 ## Supported versions
 
@@ -70,7 +83,7 @@ This builds the recompiler, runs it on your copy of the game with the settings i
 
 Release files built by GitHub carry a provenance attestation. With the GitHub CLI:
 
-    gh attestation verify <file> --repo <owner>/<repo>
+    gh attestation verify <file> --repo retro-gaming-tools/z-rust
 
 It tells you which workflow run and which commit built the file.
 
