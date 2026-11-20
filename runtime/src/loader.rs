@@ -453,6 +453,9 @@ pub fn run(game: &'static Game) {
         if !arguments.iter().any(|argument| !argument.starts_with("--")) {
             settings.folder = String::new();
         }
+        // A player starts in fullscreen unless they chose a window before
+        // (the saved setting wins) or asked for one with `--window`.
+        settings.fullscreen = !arguments.iter().any(|argument| argument == "--window");
         match host::launcher::show(game, settings) {
             host::launcher::Outcome::Start(chosen) => settings = chosen,
             host::launcher::Outcome::Quit => std::process::exit(0),

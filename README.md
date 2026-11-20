@@ -19,6 +19,8 @@ The launcher opens before the game. Your choices are saved in `settings.ini` bes
 
 The launcher works with the mouse, the keyboard (arrow keys to choose and change, Enter to confirm, Escape to quit) and a controller (d-pad to choose and change, A to confirm, Start to start the game, B to quit).
 
+In the game, **F11** switches between fullscreen and a window, and **F10** shows or hides a frame counter. The port starts in fullscreen unless the launcher's Display row says Window.
+
 ## Supported versions
 
 Z came as two programs: the Windows 95 release (`WINZ.EXE`) and the DOS release (`ZED.EXE`). The port carries both, and each plays as its own program, the way it did on its own system. It checks the one it starts by SHA-256:

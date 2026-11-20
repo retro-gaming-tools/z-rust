@@ -728,13 +728,14 @@ pub(crate) fn handle_event(cpu: &mut Cpu, event: &Event) {
     match event.u32_at(0) {
         EVENT_QUIT => std::process::exit(0),
         EVENT_MOUSE_MOTION => {
-            let dos = cpu.host.timers.dos;
             let video = cpu.host.video.as_mut().unwrap();
-            if dos && !video.relative {
-                // A DOS game has the mouse to itself, as in DOSBox with
-                // `autolock`: the window holds on to it, so the pointer can't
-                // leave the picture into the letterbox bars, where the game's
-                // pointer would stay at the edge until the cursor came back.
+            if !video.relative {
+                // The game has the mouse to itself, as in DOSBox with
+                // `autolock` (and as the fullscreen Windows original did): the
+                // window holds on to it, so the pointer can't leave the picture
+                // into the letterbox bars, where the game's pointer would stay
+                // at the edge until the cursor came back. Menus and dialogs
+                // drawn by the runtime release it while they are open.
                 video.relative = true;
                 video.remainder = (0.0, 0.0);
                 unsafe { (video.set_relative)(video.window, true) };
@@ -771,18 +772,10 @@ pub(crate) fn handle_event(cpu: &mut Cpu, event: &Event) {
             let down = kind == EVENT_MOUSE_BUTTON_DOWN;
             cpu.host.alt_alone &= !down;
             let (x, y) = cpu.host.pointer;
-            let dos = cpu.host.timers.dos;
             let video = cpu.host.video.as_mut().unwrap();
             let bit = 1u32 << (event.0[24] & 31);
             video.buttons = if down { video.buttons | bit } else { video.buttons & !bit };
             video.press_travel = down.then_some((0.0, 0.0));
-            if video.buttons == 0 && video.relative && !dos {
-                // Hand the cursor back where the game's pointer is.
-                video.relative = false;
-                unsafe { (video.set_relative)(video.window, false) };
-                let (window_x, window_y) = video.game_to_window(x as f32 + 0.5, y as f32 + 0.5);
-                unsafe { (video.warp_mouse)(video.window, window_x, window_y) };
-            }
             let position = x | (y << 16);
             match event.0[24] {
                 1 => cpu.host.post((if down { WM_LBUTTONDOWN } else { WM_LBUTTONUP }, if down { MK_LBUTTON } else { 0 }, position)),
