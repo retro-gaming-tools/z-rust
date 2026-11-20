@@ -1,0 +1,8 @@
+[package]
+name = "z-code-zed"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+recomp-runtime = { path = "../../runtime" }
+z-code-winz = { path = "../winz" }

@@ -1,0 +1,33 @@
+{
+  "name": "z",
+  "title": "Z",
+  "needs": "Z by the Bitmap Brothers: the Windows 95 release (WINZ.EXE dated 1998-03-02) or the German or English DOS release (the Steam release isn't supported)",
+  "recompVersion": "0.5-beta",
+  "recompCommand": "Z\\WINZ.EXE",
+  "recompRegistry": [
+    "SOFTWARE\\Bitmap Brothers\\Z\\v1.0\\WinZPaths\\War=C:\\GAME\\Z\\",
+    "SOFTWARE\\Bitmap Brothers\\Z\\v1.0\\WinZPaths\\Cuts=D:\\",
+    "SOFTWARE\\Bitmap Brothers\\Z\\v1.0\\WinZPaths\\SeenIntro=dword:1"
+  ],
+  "recompCd": "Z95VOLUME",
+  "recompFiles": {
+    "Z/WINZ.EXE": "9d2f373083342e76603ad3ff155c7cd557d0d7ba5fb1b6e4b7923d7739ebb25e",
+    "ZED.EXE": "5d61461181ae0c0b4b718c9f7dab61d027f623e4d5ce02b0b79047d80e36979b"
+  },
+  "recompVersionNames": {
+    "Z/WINZ.EXE": "Windows 95 release",
+    "ZED.EXE": "DOS release"
+  },
+  "launcherTheme": {
+    "style": "metal",
+    "background": "26262c",
+    "panel": "46464e",
+    "selected": "6e4420",
+    "border": "f08c28",
+    "text": "e8e4dc",
+    "value": "ff7a3c",
+    "good": "9be05a",
+    "bad": "ff4632",
+    "dim": "948e86"
+  }
+}
