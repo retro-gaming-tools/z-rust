@@ -467,6 +467,12 @@ impl Cpu {
     pub fn allocate(&mut self, size: u32) -> u32 {
         let rounded = (size.max(1) + 15) & !15;
         if let Some(block) = self.host.free.get_mut(&rounded).and_then(|list| list.pop()) {
+            // The size asked for this time: a block of the same rounded size
+            // may have been smaller when it was first handed out, and a
+            // reallocation copies this many bytes. Stale, it cut the end off
+            // Drakan's save directory and the save didn't load (shared
+            // runtime, 8bf8afa).
+            self.w32(block - 12, size);
             return block;
         }
         let block = self.host.heap_next + 16;
@@ -529,5 +535,31 @@ pub fn find(dll: &str, name: &str) -> Option<GuestFn> {
         "comctl32.dll" => other::find_comctl(name),
         "msvfw32.dll" => other::find_video_for_windows(name),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::cpu::test_cpu;
+
+    #[test]
+    fn a_reused_block_reports_the_size_asked_this_time() {
+        let mut cpu = test_cpu();
+        let small = cpu.allocate(20);
+        assert_eq!(cpu.block_size(small), 20);
+        cpu.release(small);
+        let again = cpu.allocate(30); // same 32-byte slot, bigger request
+        assert_eq!(again, small);
+        assert_eq!(cpu.block_size(again), 30);
+    }
+
+    #[test]
+    fn blocks_are_aligned_and_do_not_overlap() {
+        let mut cpu = test_cpu();
+        let blocks: Vec<u32> = [1, 15, 16, 17, 100].iter().map(|&size| cpu.allocate(size)).collect();
+        for pair in blocks.windows(2) {
+            assert_eq!(pair[0] % 16, 0);
+            assert!(pair[1] >= pair[0] + cpu.block_size(pair[0]));
+        }
     }
 }

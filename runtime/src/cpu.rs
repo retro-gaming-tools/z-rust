@@ -240,6 +240,30 @@ macro_rules! arithmetic {
     };
 }
 
+/// A Cpu with empty guest memory and a fresh host state, for unit tests of
+/// runtime functions that read and write guest memory.
+#[cfg(test)]
+pub fn test_cpu() -> Cpu {
+    Cpu {
+        eax: 0, ecx: 0, edx: 0, ebx: 0, esp: 0x1000, ebp: 0, esi: 0, edi: 0, returned_to: 0,
+        segments: [crate::host::dos::FLAT; 6], bases: [0; 6],
+        cf: false, zf: false, sf: false, of: false, df: false, parity: 1, eflags_high: 0, interrupts_off: false,
+        fs_base: 0,
+        st: [0.0; 8], top: 0, c0: false, c1: false, c2: false, c3: false, fpu_control: 0x27f,
+        memory: crate::sys::reserve_memory(),
+        functions: HashMap::new(),
+        imports: Vec::new(),
+        host: Box::new(crate::host::State::new(".")),
+        trace: false,
+        trace_filter: None,
+        watched: HashMap::new(),
+        watch_counts: HashMap::new(),
+        profiling: false,
+        hits: HashMap::new(),
+        error_function: None,
+    }
+}
+
 impl Cpu {
     arithmetic!(add32, sub32, adc32, sbb32, and32, or32, xor32, inc32, dec32, neg32, shl32, shr32, sar32, rol32, ror32, rcl32, rcr32, u32, i32, 32);
     arithmetic!(add16, sub16, adc16, sbb16, and16, or16, xor16, inc16, dec16, neg16, shl16, shr16, sar16, rol16, ror16, rcl16, rcr16, u16, i16, 16);

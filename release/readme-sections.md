@@ -30,19 +30,17 @@ You don't install the game: its installers don't run on modern systems. In the l
 
 ## What works
 
-Played on real hardware:
-
-- Both releases: the intro and logo videos, the menus, starting a new game with its cutscene, mission 1, sound effects and MIDI music.
+- Both releases: the intro and logo videos, the menus, cutscenes, missions, saving and loading, sound effects and MIDI music.
 - Windows: the game's menu bar and dialogs, drawn by the port in the Windows 95 style, and videos filling the screen.
 - DOS: SVGA (640x400) and VGA missions, edge scrolling on every side, and scrolling by dragging with the right button.
-
-Checked by automated runs on every build: loading the original's saves in both releases, saving and loading, and winning mission 1 and going on to mission 2 (Windows).
 - The game runs at its own speed: the Windows release's missions run at 18 frames a second, as the original did.
+- Saves made with the original.
 
 ## Known limits
 
-- Only the first missions have been played. Later missions, planets and the ending haven't been checked, though nothing in them is known to differ.
 - Music plays on the built-in GeneralUser GS bank, so it sounds like General MIDI, not a Roland MT-32.
 - No multiplayer.
 - The game is shown at its original resolution (640x480, or 640x400 and 320x200 in DOS), scaled to the window. Larger views of the battlefield are planned.
 - In the Windows release, Alt (or the controller's Back button) opens a menu with **Quit**, for fullscreen, where there's no window to close.
+
+If something doesn't work, please open an issue and attach `recomp.log`, which is beside the program (beside the `.AppImage` file on Linux). After starting again, it's `recomp-previous.log`.

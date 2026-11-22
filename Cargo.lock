@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "z-rust"
-version = "0.5.0-beta"
+version = "0.51.0-beta"
 dependencies = [
  "recomp-runtime",
  "z-code-winz",

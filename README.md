@@ -38,31 +38,29 @@ You don't install the game: its installers don't run on modern systems. In the l
 
 ## What works
 
-Played on real hardware:
-
-- Both releases: the intro and logo videos, the menus, starting a new game with its cutscene, mission 1, sound effects and MIDI music.
+- Both releases: the intro and logo videos, the menus, cutscenes, missions, saving and loading, sound effects and MIDI music.
 - Windows: the game's menu bar and dialogs, drawn by the port in the Windows 95 style, and videos filling the screen.
 - DOS: SVGA (640x400) and VGA missions, edge scrolling on every side, and scrolling by dragging with the right button.
-
-Checked by automated runs on every build: loading the original's saves in both releases, saving and loading, and winning mission 1 and going on to mission 2 (Windows).
 - The game runs at its own speed: the Windows release's missions run at 18 frames a second, as the original did.
+- Saves made with the original.
 
 ## Known limits
 
-- Only the first missions have been played. Later missions, planets and the ending haven't been checked, though nothing in them is known to differ.
 - Music plays on the built-in GeneralUser GS bank, so it sounds like General MIDI, not a Roland MT-32.
 - No multiplayer.
 - The game is shown at its original resolution (640x480, or 640x400 and 320x200 in DOS), scaled to the window. Larger views of the battlefield are planned.
 - In the Windows release, Alt (or the controller's Back button) opens a menu with **Quit**, for fullscreen, where there's no window to close.
 
+If something doesn't work, please open an issue and attach `recomp.log`, which is beside the program (beside the `.AppImage` file on Linux). After starting again, it's `recomp-previous.log`.
+
 ## Why the source is here
 
 So you don't have to trust a download. Everything that makes the release is in this repository:
 
-- `src/`: the game's code, translated to Rust by the recompiler. Don't edit it by hand: it's regenerated.
+- `programs/`: the game's code, translated to Rust by the recompiler, a folder for each program, and `src/`, which starts them. Don't edit them by hand: they're regenerated.
 - `mods/`: hand-written Rust that replaces some of the game's functions (see below).
-- `runtime/`: the hand-written runtime: the CPU state, the Windows functions the game calls, video, sound and input on SDL3, and the launcher.
-- `recompiler/`: the static recompiler that wrote `src/`.
+- `runtime/`: the hand-written runtime: the CPU state, the Windows and DOS functions the game calls, video, sound and input on SDL3, and the launcher.
+- `recompiler/`: the static recompiler that wrote `programs/` and `src/`.
 - `build/`, `build.sh`, `regenerate.sh`: the Docker build for the release, and the check that the code matches your game.
 - `.github/workflows/build.yml`: GitHub builds the release from a tagged commit, with build provenance.
 - `CHANGELOG.md`: what changed in each version, and `changes.sh`, which shows the full diff between two versions.
@@ -107,6 +105,6 @@ The recompiler, the runtime, the mods and the build scripts are under the MIT li
 
 MIDI music is played by [rustysynth](https://github.com/sinshu/rustysynth) (MIT) with the GeneralUser GS sound bank v2.0.3 by S. Christian Collins (https://www.schristiancollins.com), which is built into the program. Its licence is in `runtime/assets/GeneralUser-GS-LICENSE.txt`.
 
-The code in `src/code/` is translated from the program files of the original game, including the Microsoft C runtime it comes with. That code belongs to its rights holders, so no licence is granted for it here. This project isn't affiliated with or endorsed by them. Please buy the game.
+The code in `programs/` is translated from the program files of the original game, including the C runtimes they come with. That code belongs to its rights holders, so no licence is granted for it here. This project isn't affiliated with or endorsed by them. Please buy the game.
 
 Generated for `z` by the recompiler in `recompiler/`.

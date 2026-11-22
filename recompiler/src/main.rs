@@ -256,10 +256,10 @@ The coding was done by AI (Claude, by Anthropic). The testing was done by a huma
 
 So you don't have to trust a download. Everything that makes the release is in this repository:
 
-- `src/`: the game's code, translated to Rust by the recompiler. Don't edit it by hand: it's regenerated.
+- `programs/`: the game's code, translated to Rust by the recompiler, a folder for each program, and `src/`, which starts them. Don't edit them by hand: they're regenerated.
 - `mods/`: hand-written Rust that replaces some of the game's functions (see below).
-- `runtime/`: the hand-written runtime: the CPU state, the Windows functions the game calls, video, sound and input on SDL3, and the launcher.
-- `recompiler/`: the static recompiler that wrote `src/`.
+- `runtime/`: the hand-written runtime: the CPU state, the Windows and DOS functions the game calls, video, sound and input on SDL3, and the launcher.
+- `recompiler/`: the static recompiler that wrote `programs/` and `src/`.
 - `build/`, `build.sh`, `regenerate.sh`: the Docker build for the release, and the check that the code matches your game.
 - `.github/workflows/build.yml`: GitHub builds the release from a tagged commit, with build provenance.
 - `CHANGELOG.md`: what changed in each version, and `changes.sh`, which shows the full diff between two versions.
@@ -304,7 +304,7 @@ The recompiler, the runtime, the mods and the build scripts are under the MIT li
 
 MIDI music is played by [rustysynth](https://github.com/sinshu/rustysynth) (MIT) with the GeneralUser GS sound bank v2.0.3 by S. Christian Collins (https://www.schristiancollins.com), which is built into the program. Its licence is in `runtime/assets/GeneralUser-GS-LICENSE.txt`.
 
-The code in `src/code/` is translated from the program files of the original game, including the Microsoft C runtime it comes with. That code belongs to its rights holders, so no licence is granted for it here. This project isn't affiliated with or endorsed by them. Please buy the game.
+The code in `programs/` is translated from the program files of the original game, including the C runtimes they come with. That code belongs to its rights holders, so no licence is granted for it here. This project isn't affiliated with or endorsed by them. Please buy the game.
 
 Generated for `{game}` by the recompiler in `recompiler/`.
 "#)

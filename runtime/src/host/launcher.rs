@@ -94,7 +94,34 @@ pub fn wanted(arguments: &[String]) -> bool {
     !play && !scripted && std::env::var_os("RECOMP_HEADLESS").is_none()
 }
 
-#[derive(Clone, Copy, PartialEq)]
+/// A step of the launcher in `recomp.log`, written at once in case the next one crashes.
+pub(crate) fn note(text: &str) {
+    crate::runlog::line(&format!("launcher: {text}"));
+}
+
+fn note_settings(game: &Game, settings: &Settings) {
+    let renderer = game.renderers.get(settings.renderer).map_or("the game's only one", |(_, label)| *label);
+    note(&format!("game {:?}, renderer {renderer}, scale {}, fullscreen {}, 3D on the processor {}", settings.folder, settings.scale, settings.fullscreen, settings.processor));
+}
+
+/// Why SDL couldn't do what was asked.
+fn sdl_error() -> String {
+    unsafe {
+        let library = sys::open_sdl();
+        if library.is_null() {
+            return "SDL3 couldn't be loaded".to_string();
+        }
+        let error: unsafe extern "C" fn() -> *const c_char = symbol(library, "SDL_GetError");
+        CStr::from_ptr(error()).to_string_lossy().into_owned()
+    }
+}
+
+/// The folder `settings_path` is in, for `recomp.log` when the program's folder is read-only.
+pub(crate) fn settings_folder(game: &Game) -> Option<std::path::PathBuf> {
+    Some(settings_path(game)?.parent()?.to_path_buf())
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Row {
     /// Shows the game's folder or disc image, and picks a folder.
     Folder,
@@ -127,6 +154,12 @@ fn game_place(game: &Game, picked: &str) -> String {
     }
     let folder = if path.is_dir() { path.to_path_buf() } else { path.parent().map(|p| p.to_path_buf()).unwrap_or_default() };
     let passes = |folder: &std::path::Path| loader::check_files(game, &folder.to_string_lossy()).is_ok();
+    // A folder that holds only the disc image, such as a `.bin` and its `.cue`.
+    if !passes(&folder) {
+        if let Some(image) = disc::image_in(&folder).filter(|image| disc::Disc::open(image).is_ok()) {
+            return image.display().to_string();
+        }
+    }
     match folder.parent() {
         Some(above) if !passes(&folder) && passes(above) => above.display().to_string(),
         _ => folder.display().to_string(),
@@ -960,6 +993,7 @@ fn click_step(game: &Game, row: Row, settings: &Settings, x: f32) -> i32 {
 /// Changes a setting by one step, or does what a button row does. Returns the
 /// outcome when the launcher is done.
 fn change(sdl: &Sdl, game: &Game, row: Row, step: i32, settings: &mut Settings, ready: bool) -> Option<bool> {
+    note(&format!("pressed {row:?}, step {step}"));
     match row {
         Row::Folder => {
             let start = dialog_start(&settings.folder);
@@ -999,11 +1033,18 @@ pub fn show(game: &Game, mut settings: Settings) -> Outcome {
     let gave_folder = std::env::args().skip(1).any(|argument| !argument.starts_with("--"));
     load(game, &mut settings, gave_folder);
     let _ = THEME.set(Theme::parse(game.theme));
-    let Some(sdl) = Sdl::open(game) else { return Outcome::Unavailable(settings) };
+    note_settings(game, &settings);
+    note("opening the window");
+    let Some(sdl) = Sdl::open(game) else {
+        note(&format!("no window: {}", sdl_error()));
+        return Outcome::Unavailable(settings);
+    };
+    note("window open, checking the game");
     let mut advanced = false;
     let mut all = rows(game, advanced);
     let start_row = all.iter().position(|row| *row == Row::Start).unwrap_or(0);
     let mut status = folder_status(game, &settings.folder);
+    note(&status.0);
     let mut warning = folder_warning(&settings.folder);
     // Start is ready to press, unless the folder needs choosing first.
     let mut selected = if status.1 { start_row } else { 0 };
@@ -1092,8 +1133,10 @@ pub fn show(game: &Game, mut settings: Settings) -> Outcome {
             }
         }
         if let Some(picked) = PICKED.lock().unwrap().take() {
+            note(&format!("picked {picked:?}"));
             settings.folder = game_place(game, &picked);
             status = folder_status(game, &settings.folder);
+            note(&status.0);
             warning = folder_warning(&settings.folder);
             // The folder's row is on the first page.
             advanced = false;
@@ -1104,9 +1147,11 @@ pub fn show(game: &Game, mut settings: Settings) -> Outcome {
         // went to is what's remembered. If that fails the launcher stays, with
         // the reason where the folder's state is shown.
         if result == Some(true) && disc::is_image(std::path::Path::new(&settings.folder)) {
+            note("unpacking the disc image");
             match unpack_image(&sdl, game, &settings.folder) {
                 Ok(folder) => settings.folder = folder,
                 Err(problem) => {
+                    note(&problem);
                     status = (problem, false);
                     selected = 0;
                     result = None;
@@ -1119,6 +1164,8 @@ pub fn show(game: &Game, mut settings: Settings) -> Outcome {
         draw(&sdl, game, &settings, &status, &warning, selected, advanced);
         unsafe { (sdl.delay)(FRAME_MILLISECONDS) };
     };
+    note(if finished { "closing to start the game" } else { "closing, the player quit" });
+    note_settings(game, &settings);
     sdl.close();
     if finished {
         save(game, &settings);
