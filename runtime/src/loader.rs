@@ -108,6 +108,8 @@ pub(crate) fn default_folder(game: &Game) -> String {
     let program = std::env::current_exe().ok().and_then(|path| Some(path.parent()?.to_path_buf()));
     let mut places = vec![std::path::PathBuf::from("game")];
     places.extend(program.iter().map(|folder| folder.join("game")));
+    // With `--xdg`, an unpacked disc is in the data folder.
+    places.extend(host::launcher::files_folder().map(|folder| folder.join("game")));
     places.push(std::path::PathBuf::from("."));
     places.extend(program);
     let firsts: Vec<&str> = programs(game).iter().map(|program| program[0].file).collect();
@@ -210,7 +212,7 @@ fn image_program(game: &Game, image: &std::path::Path) -> Result<&'static [Modul
 /// A folder that holds another disc (Z's German and European DOS discs carry
 /// the same program) is left alone, and the disc goes to `-2`, `-3` and so on.
 pub(crate) fn unpack_target(game: &Game, image: &std::path::Path) -> std::path::PathBuf {
-    let base = host::launcher::program_folder().unwrap_or_default();
+    let base = host::launcher::files_folder().unwrap_or_default();
     let first = programs(game)[0][0].file;
     let name = match image_program(game, image) {
         Ok(program) if program[0].file != first => {
@@ -224,6 +226,31 @@ pub(crate) fn unpack_target(game: &Game, image: &std::path::Path) -> std::path::
         .map(|number| if number == 1 { base.join(&name) } else { base.join(format!("{name}-{number}")) })
         .find(|folder| !folder.exists() || holds_image_version(game, &folder.display().to_string(), image))
         .unwrap_or_else(|| base.join(&name))
+}
+
+/// The drive behind a read-only folder that is a mounted CD or DVD, read like a disc image.
+pub(crate) fn disc_drive(folder: &std::path::Path) -> Option<std::path::PathBuf> {
+    (folder.is_dir() && !host::disc::is_writable(folder)).then(|| host::disc::drive_of(folder)).flatten()
+}
+
+/// A game folder that can't be written to, such as a mounted disc whose drive can't be read,
+/// is copied into `game` beside the program, since the game writes its saves beside its
+/// files. Gives the folder to use: the copy, or `folder` itself when it's writable.
+pub(crate) fn copy_read_only(game: &Game, folder: &str, progress: &mut dyn FnMut(u64, u64)) -> Result<String, String> {
+    let path = std::path::Path::new(folder);
+    if !path.is_dir() || host::disc::is_writable(path) {
+        return Ok(folder.to_string());
+    }
+    let target = host::launcher::files_folder().unwrap_or_default().join("game");
+    let copy = target.display().to_string();
+    if check_files(game, &copy).is_ok() {
+        return Ok(copy);
+    }
+    if target.exists() {
+        return Err(format!("{folder} can't be written to, and {copy} is in the way of a copy: it holds other files. Move or delete it."));
+    }
+    host::disc::copy_folder(path, &target, progress)?;
+    Ok(copy)
 }
 
 /// Whether a folder already holds the files of the disc image: its version,
@@ -403,6 +430,8 @@ pub struct Settings {
     pub fullscreen: bool,
     /// Whether Glide is drawn by the processor instead of the graphics card.
     pub processor: bool,
+    /// Whether settings, `recomp.log` and unpacked discs go to the XDG folders (Linux).
+    pub xdg: bool,
     /// One for each of the game's switches.
     pub switches: Vec<bool>,
     /// An index into the game's renderers.
@@ -445,6 +474,7 @@ fn settings_from_arguments(game: &Game, arguments: &[String]) -> Settings {
         scale: scale.unwrap_or(DEFAULT_SCALE).clamp(1, 6),
         fullscreen: has("--fullscreen"),
         processor: has("--drawing=processor"),
+        xdg: host::launcher::xdg_on(),
         switches: game.switches.iter().map(|(name, _, _)| has(name)).collect(),
         renderer: arguments.iter().find_map(|argument| find_choice(game.renderers, argument.strip_prefix("--renderer=")?)).unwrap_or(0),
         language: arguments.iter().find_map(|argument| find_choice(game.languages, argument.strip_prefix("--language=")?)).unwrap_or(0),
@@ -457,9 +487,10 @@ fn settings_from_arguments(game: &Game, arguments: &[String]) -> Settings {
 
 /// Runs the game on a thread with a host stack deep enough for its calls.
 pub fn run(game: &'static Game) {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    host::launcher::choose_folders(game, &arguments);
     crate::runlog::start(game.title, game.version, || host::launcher::settings_folder(game));
     report_crashes(game.title);
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
     let mut settings = settings_from_arguments(game, &arguments);
     host::launcher::snapshot(game, &settings);
     if host::launcher::wanted(&arguments) {
@@ -487,6 +518,10 @@ pub fn run(game: &'static Game) {
     }
     let command: &'static str = Box::leak(command_with_choices(game, &settings).into_boxed_str());
     let Settings { mut folder, switches, mods, .. } = settings;
+    // A mounted CD or DVD stands for its drive.
+    if let Some(drive) = disc_drive(std::path::Path::new(&folder)) {
+        folder = drive.display().to_string();
+    }
     // A folder that holds only a disc image stands for that image.
     if std::path::Path::new(&folder).is_dir() && check_files(game, &folder).is_err() {
         if let Some(image) = host::disc::image_in(std::path::Path::new(&folder)) {
@@ -509,6 +544,16 @@ pub fn run(game: &'static Game) {
             }
         }
         folder = unpacked;
+    }
+    // A game on a disc, or anywhere else read-only, with no launcher to copy it.
+    if check_files(game, &folder).is_ok() {
+        match copy_read_only(game, &folder, &mut |_, _| {}) {
+            Ok(copied) => folder = copied,
+            Err(problem) => {
+                host::video::show_error(game.title, &problem);
+                std::process::exit(1);
+            }
+        }
     }
     crate::runlog::line(&format!("game folder: {folder}\ncommand: {command}"));
     if let Err(text) = check_files(game, &folder) {

@@ -1,0 +1,9 @@
+[package]
+name = "recomp-disc"
+version = "0.1.0"
+edition = "2021"
+description = "CD and DVD access shared by every recompiled game's runtime: disc images, real drives, read-only game folders."
+
+# Standard library only, so every runtime, its own copy or the shared one, can
+# use it offline without a new crate in the build image.
+[dependencies]

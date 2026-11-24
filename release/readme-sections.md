@@ -7,11 +7,12 @@ The launcher opens before the game. Your choices are saved in `settings.ini` bes
 - **Game files**: where your copy of the game is. Click *Choose folder...* or press Enter to pick a folder, or drop a folder or disc image onto the window. The line below it says which version was found, or what's missing.
 - **Choose a disc image or game file**: pick a disc image (`.iso`, `.bin`, `.img`, `.mdf`, `.cue`, `.ccd`) or any file of the game.
 - **Display**: *Window* or *Fullscreen*.
+- **Advanced settings... > Files kept** (Linux only): *Beside program* (the default: `settings.ini`, `recomp.log` and unpacked discs beside the `.AppImage`) or *Home (XDG)* (`~/.config/z-rust` for the settings, `~/.local/share/z-rust` for the log and unpacked discs, for AppImage managers that keep all AppImages in one folder). `--xdg` on the command line does the same.
 - **Start game** and **Quit**.
 
 The launcher works with the mouse, the keyboard (arrow keys to choose and change, Enter to confirm, Escape to quit) and a controller (d-pad to choose and change, A to confirm, Start to start the game, B to quit).
 
-In the game, **F11** switches between fullscreen and a window, and **F10** shows or hides a frame counter. The port starts in fullscreen unless the launcher's Display row says Window.
+In the game, **F11** switches between fullscreen and a window, and **F10** shows or hides a frame counter. The port starts in fullscreen unless the launcher's Display row says Window. **F10 and F11 belong to the port**: the game never sees them, so they can't be used for anything in the game.
 
 ## Supported versions
 
@@ -26,7 +27,7 @@ Only these original DOS and Windows 95 releases are supported. **The Steam relea
 
 ## Starting
 
-You don't install the game: its installers don't run on modern systems. In the launcher, pick your disc image or any file of the game in a folder, or drop it on the window. An image is unpacked once into a `game` folder beside the program (`game-zed` for the DOS release), and every later start finds it by itself. The DOS release gets its CD drive and language switch (`/CD:E /ger` or `/CD:E /eng`) from the port, and needs no sound, video or mouse driver set-up: the port picks the best settings, with SVGA on.
+You don't install the game: its installers don't run on modern systems. In the launcher, pick your disc image or any file of the game in a folder, or drop it on the window. An image is unpacked once into a `game` folder beside the program (`game-zed` for the DOS release), and every later start finds it by itself. A real CD or DVD in a drive works the same way: pick the mounted disc's folder or any file on it. The DOS release gets its CD drive and language switch (`/CD:E /ger` or `/CD:E /eng`) from the port, and needs no sound, video or mouse driver set-up: the port picks the best settings, with SVGA on.
 
 ## What works
 

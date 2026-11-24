@@ -23,7 +23,7 @@ fn open_in(folder: PathBuf) -> Option<(PathBuf, std::fs::File)> {
 
 /// Starts the log beside the program, as `settings.ini` is, else in `fallback`.
 pub fn start(title: &str, version: &str, fallback: impl FnOnce() -> Option<PathBuf>) {
-    let opened = crate::host::launcher::program_folder().and_then(open_in).or_else(|| fallback().and_then(open_in));
+    let opened = crate::host::launcher::files_folder().and_then(open_in).or_else(|| fallback().and_then(open_in));
     if let Some((path, file)) = opened {
         let _ = PATH.set(path);
         *LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(file);

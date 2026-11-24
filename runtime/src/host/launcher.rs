@@ -135,6 +135,9 @@ enum Row {
     Language,
     Switch(usize),
     Mod(usize),
+    /// Where settings, `recomp.log` and unpacked discs go: beside the program or in the XDG
+    /// folders (Linux only).
+    Files,
     /// Opens the page of settings most players should leave alone.
     Advanced,
     /// Leaves that page.
@@ -153,6 +156,10 @@ fn game_place(game: &Game, picked: &str) -> String {
         return picked.to_string();
     }
     let folder = if path.is_dir() { path.to_path_buf() } else { path.parent().map(|p| p.to_path_buf()).unwrap_or_default() };
+    // A mounted CD or DVD stands for its drive, read like an image.
+    if let Some(drive) = loader::disc_drive(&folder) {
+        return drive.display().to_string();
+    }
     let passes = |folder: &std::path::Path| loader::check_files(game, &folder.to_string_lossy()).is_ok();
     // A folder that holds only the disc image, such as a `.bin` and its `.cue`.
     if !passes(&folder) {
@@ -178,9 +185,20 @@ fn unpack_image(sdl: &Sdl, game: &Game, image: &str) -> Result<String, String> {
     if target.exists() {
         return Err(format!("{folder} is in the way: it holds other files. Move or delete it."));
     }
+    disc::unpack(std::path::Path::new(image), &target, &mut progress_screen(sdl, game, "Unpacking the disc"))?;
+    Ok(folder)
+}
+
+/// Copies a game folder that can't be written to, such as a mounted disc whose drive can't
+/// be read, into `game` beside the program, showing how far it is.
+fn copy_read_only(sdl: &Sdl, game: &Game, folder: &str) -> Result<String, String> {
+    loader::copy_read_only(game, folder, &mut progress_screen(sdl, game, "Copying the game from the disc"))
+}
+
+fn progress_screen<'a>(sdl: &'a Sdl, game: &'a Game, label: &'a str) -> impl FnMut(u64, u64) + 'a {
     let mut shown = u64::MAX;
     let mut event = Event([0; 128]);
-    disc::unpack(std::path::Path::new(image), &target, &mut |written, total| {
+    move |written, total| {
         let percent = written * 100 / total.max(1);
         if percent == shown {
             return;
@@ -190,14 +208,13 @@ fn unpack_image(sdl: &Sdl, game: &Game, image: &str) -> Result<String, String> {
         while unsafe { (sdl.poll)(&mut event) } {}
         sdl.background();
         sdl.header(&game.title.to_uppercase(), game.version);
-        let text = format!("Unpacking the disc: {percent}%");
+        let text = format!("{label}: {percent}%");
         sdl.write((WIDTH - text.len() as f32 * CHARACTER) / 2.0, HEIGHT / 2.0 - 12.0, &text, theme().text);
         let bar = [MARGIN, HEIGHT / 2.0 + 4.0, WIDTH - 2.0 * MARGIN, 10.0];
         sdl.rect(bar, theme().panel, true);
         sdl.rect([bar[0], bar[1], bar[2] * percent as f32 / 100.0, bar[3]], theme().border, true);
         unsafe { (sdl.present)(sdl.renderer) };
-    })?;
-    Ok(folder)
+    }
 }
 
 /// Where a dialog opens: the chosen folder, or the folder of the chosen image, if it's there,
@@ -603,10 +620,14 @@ fn folder_status(game: &Game, folder: &str) -> (String, bool) {
         };
     }
     match loader::check_files(game, folder) {
-        Ok(()) => match loader::version_in(game, folder).map(str::to_string).or(recognised.clone()) {
-            Some(name) => (format!("Found: {name}"), true),
-            None => ("Game files found".to_string(), true),
-        },
+        Ok(()) => {
+            let disc = if disc::is_writable(std::path::Path::new(folder)) { "" } else { ", on disc" };
+            match loader::version_in(game, folder).map(str::to_string).or(recognised.clone()) {
+                Some(name) => (format!("Found: {name}{disc}"), true),
+                None if disc.is_empty() => ("Game files found".to_string(), true),
+                None => ("Game found on disc, copied at start".to_string(), true),
+            }
+        }
         Err(text) => {
             let problem = text.lines().find(|line| line.starts_with("Missing") || line.starts_with("From a different")).unwrap_or("Game files not found");
             // A long list doesn't fit, and names a wrong folder better than any file does.
@@ -681,9 +702,92 @@ pub(crate) fn program_folder() -> Option<std::path::PathBuf> {
     program.parent().map(|folder| folder.to_path_buf())
 }
 
-/// Where the settings go: beside the program, unless a game's own file of that name is there.
+/// The XDG folders for settings and for data (`recomp.log`, unpacked discs), when the player
+/// chose them; `None` keeps everything beside the program (the portable default).
+static XDG: Mutex<Option<(std::path::PathBuf, std::path::PathBuf)>> = Mutex::new(None);
+
+fn xdg() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    XDG.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+}
+
+/// Whether the launcher offers the choice of where files go: only Linux has XDG folders.
+const XDG_OFFERED: bool = cfg!(target_os = "linux");
+
+/// The XDG base folder from `variable`, or `fallback` under the home folder, as the spec says:
+/// a relative path in the variable is ignored.
+fn xdg_base(variable: &str, fallback: &str) -> Option<std::path::PathBuf> {
+    let set = std::env::var_os(variable).map(std::path::PathBuf::from).filter(|path| path.is_absolute());
+    set.or_else(|| Some(std::path::PathBuf::from(std::env::var_os("HOME")?).join(fallback)))
+}
+
+/// `$XDG_CONFIG_HOME/<game>-rust` and `$XDG_DATA_HOME/<game>-rust`, on Linux.
+fn xdg_paths(game: &Game) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    if !XDG_OFFERED {
+        return None;
+    }
+    let name = format!("{}-rust", game.title.to_lowercase().replace(' ', "-"));
+    Some((xdg_base("XDG_CONFIG_HOME", ".config")?.join(&name), xdg_base("XDG_DATA_HOME", ".local/share")?.join(&name)))
+}
+
+/// Linux only: the launcher's "Files kept" row, or `--xdg`, keeps the settings in
+/// `$XDG_CONFIG_HOME/<game>-rust` and the data in `$XDG_DATA_HOME/<game>-rust`, for an
+/// AppImage kept in a shared folder such as an AppImage manager's. Our `settings.ini` in
+/// that settings folder is what keeps the choice for later starts. Called once at the
+/// start, before anything is written.
+pub(crate) fn choose_folders(game: &Game, arguments: &[String]) {
+    let asked = arguments.iter().any(|argument| argument.eq_ignore_ascii_case("--xdg"));
+    let Some((config, _)) = xdg_paths(game) else { return };
+    let chosen = std::fs::read_to_string(config.join(SETTINGS_FILE)).is_ok_and(|text| text.starts_with(SETTINGS_HEADER));
+    if asked || chosen {
+        set_xdg(game, true);
+    }
+}
+
+/// Switches between the XDG folders and the program's. The XDG ones are made, and a
+/// `settings.ini` with only the header marks the choice until the settings are saved there.
+/// Switching back removes that `settings.ini` and the folder if it's then empty; the data
+/// folder, with any unpacked discs, is left alone.
+fn set_xdg(game: &Game, on: bool) {
+    let Some((config, data)) = xdg_paths(game) else { return };
+    let marker = config.join(SETTINGS_FILE);
+    if on {
+        let made = std::fs::create_dir_all(&config).is_ok() && std::fs::create_dir_all(&data).is_ok();
+        if made && (marker.exists() || std::fs::write(&marker, SETTINGS_HEADER).is_ok()) {
+            *XDG.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((config, data));
+        } else {
+            note(&format!("couldn't make {} and {}: files stay beside the program", config.display(), data.display()));
+        }
+    } else {
+        *XDG.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        if std::fs::read_to_string(&marker).is_ok_and(|text| text.starts_with(SETTINGS_HEADER)) {
+            let _ = std::fs::remove_file(&marker);
+        }
+        let _ = std::fs::remove_dir(&config);
+    }
+}
+
+/// Whether the XDG folders are in use.
+pub(crate) fn xdg_on() -> bool {
+    xdg().is_some()
+}
+
+/// Where the port's own files go: `recomp.log` and unpacked or copied discs. Beside the
+/// program, or the XDG data folder.
+pub(crate) fn files_folder() -> Option<std::path::PathBuf> {
+    match xdg() {
+        Some((_, data)) => Some(data),
+        None => program_folder(),
+    }
+}
+
+/// Where the settings go: beside the program (or in the XDG settings folder),
+/// unless a game's own file of that name is there.
 fn settings_beside_program() -> Option<std::path::PathBuf> {
-    let path = program_folder()?.join(SETTINGS_FILE);
+    let folder = match xdg() {
+        Some((config, _)) => config,
+        None => program_folder()?,
+    };
+    let path = folder.join(SETTINGS_FILE);
     let ours = std::fs::read_to_string(&path).map_or(!path.exists(), |text| text.starts_with(SETTINGS_HEADER));
     ours.then_some(path)
 }
@@ -754,6 +858,12 @@ fn save(game: &Game, settings: &Settings) {
     for ((file, ..), on) in game.mods.iter().zip(&settings.mods) {
         text.push_str(&format!("mod.{file}={}\n", *on as u8));
     }
+    // The "Files kept" row moves the settings, and later logs and unpacked discs; this run's
+    // log stays where it was opened.
+    if settings.xdg != xdg_on() {
+        note(&format!("files kept {}", if settings.xdg { "in the XDG folders" } else { "beside the program" }));
+        set_xdg(game, settings.xdg);
+    }
     // A folder such as Program Files can refuse the write.
     let written = settings_beside_program().is_some_and(|path| std::fs::write(path, &text).is_ok());
     if !written {
@@ -786,6 +896,9 @@ fn rows(game: &Game, advanced: bool) -> Vec<Row> {
     }
     let mods = |on_advanced: bool| (0..game.mods.len()).filter(move |index| game.mods[*index].3 == on_advanced).map(Row::Mod);
     more.extend(mods(true));
+    if XDG_OFFERED {
+        more.push(Row::Files);
+    }
     if advanced {
         more.push(Row::Back);
         return more;
@@ -844,8 +957,9 @@ fn draw(sdl: &Sdl, game: &Game, settings: &Settings, status: &(String, bool), wa
                 sdl.write(left, top + 34.0, &shorten(&status.0), if status.1 { theme().good } else { theme().bad });
             }
             Row::File => sdl.write(left, line, "Choose a disc image or game file", theme().text),
-            Row::Scale | Row::Drawing | Row::Display | Row::Renderer | Row::Language | Row::Switch(_) | Row::Mod(_) => {
+            Row::Scale | Row::Drawing | Row::Display | Row::Renderer | Row::Language | Row::Switch(_) | Row::Mod(_) | Row::Files => {
                 let label = match row {
+                    Row::Files => "Files kept",
                     Row::Scale => "3D resolution",
                     Row::Drawing => "3D drawn by",
                     Row::Display => "Display",
@@ -969,6 +1083,7 @@ fn value_text(game: &Game, row: Row, settings: &Settings) -> Option<String> {
         Row::Language => game.languages.get(settings.language)?.1.to_string(),
         Row::Switch(switch) => (if settings.switches[switch] { "On" } else { "Off" }).to_string(),
         Row::Mod(index) => (if settings.mods[index] { "On" } else { "Off" }).to_string(),
+        Row::Files => (if settings.xdg { "Home (XDG)" } else { "Beside program" }).to_string(),
         _ => return None,
     };
     Some(format!("< {value} >"))
@@ -1022,6 +1137,7 @@ fn change(sdl: &Sdl, game: &Game, row: Row, step: i32, settings: &mut Settings, 
         }
         Row::Switch(index) => settings.switches[index] = !settings.switches[index],
         Row::Mod(index) => settings.mods[index] = !settings.mods[index],
+        Row::Files => settings.xdg = !settings.xdg,
         Row::Start if step == 0 && ready => return Some(true),
         Row::Quit if step == 0 => return Some(false),
         _ => {}
@@ -1149,6 +1265,20 @@ pub fn show(game: &Game, mut settings: Settings) -> Outcome {
         if result == Some(true) && disc::is_image(std::path::Path::new(&settings.folder)) {
             note("unpacking the disc image");
             match unpack_image(&sdl, game, &settings.folder) {
+                Ok(folder) => settings.folder = folder,
+                Err(problem) => {
+                    note(&problem);
+                    status = (problem, false);
+                    selected = 0;
+                    result = None;
+                }
+            }
+        }
+        // A game folder that can't be written to, such as a mounted disc, is copied first,
+        // since the game saves beside its files.
+        if result == Some(true) && !disc::is_writable(std::path::Path::new(&settings.folder)) {
+            note("copying the read-only game folder");
+            match copy_read_only(&sdl, game, &settings.folder) {
                 Ok(folder) => settings.folder = folder,
                 Err(problem) => {
                     note(&problem);

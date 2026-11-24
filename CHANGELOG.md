@@ -2,6 +2,12 @@
 
 Newest first. Each version has a tag `v<version>`, and `./changes.sh <old> <new>` shows the full diff between two of them.
 
+## 0.6-beta (2026-11-24)
+
+- Linux: the settings, `recomp.log` and unpacked discs can be kept in the XDG folders (`~/.config/z-rust`, `~/.local/share/z-rust`) instead of beside the program, with the launcher's Advanced row "Files kept" or `--xdg` ([issue #1](https://github.com/retro-gaming-tools/z-rust/issues/1)). Beside the program stays the default.
+- A real CD or DVD in a drive can be chosen as the game: a mounted disc is read like a disc image. A read-only game folder is copied beside the program first.
+- Disc images, drives and read-only folders are read by one shared part of the runtime.
+
 ## 0.51-beta (2026-11-22)
 
 - A folder that holds only a disc image can be chosen as the game.

@@ -1,201 +1,29 @@
-//! Reads the files of a CD image, so a player can hand the port the image of
-//! their disc instead of installing the game first.
-//!
-//! Plain ISO 9660 images have 2048 bytes a sector. Raw ones, such as the
-//! `.bin` of a `.bin` and `.cue` pair or a CloneCD `.img`, have 2352 with the
-//! data inside. Only the data track is read: audio tracks aren't files.
+//! Disc images, real CD and DVD drives and read-only game folders: the shared
+//! `recomp-disc` crate (the tool's `tools/recomp/disc`), which every runtime
+//! uses, so a fix there reaches every game. Z adds one step: a DOS disc keeps
+//! its program and data in Z.PAC, which its installer unpacked to the hard
+//! disk, so an unpacked or copied disc gets them beside its own files (no
+//! name is in both).
 
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-const LOGICAL: u64 = 2048;
-/// The volume descriptor is in sector 16, and names the root directory here.
-const DESCRIPTOR_SECTOR: u64 = 16;
-const ROOT_RECORD: usize = 156;
-const FOLDER_FLAG: u8 = 2;
-/// Deeper than any real disc, against images whose folders loop.
-const DEEPEST: usize = 16;
+pub use recomp_disc::*;
 
-pub struct Disc {
-    file: File,
-    sector: u64,
-    skip: u64,
+/// Unpacks Z.PAC, if the disc has one at its top, into the half-done copy.
+fn unpack_pac(folder: &Path) -> Result<(), String> {
+    let Some(pac) = std::fs::read_dir(folder).ok().into_iter().flatten().flatten().map(|entry| entry.path()).find(|path| path.file_name().is_some_and(|name| name.eq_ignore_ascii_case("Z.PAC"))) else {
+        return Ok(());
+    };
+    let data = std::fs::read(&pac).map_err(|error| format!("{} can't be read: {error}", pac.display()))?;
+    super::zpac::unpack_into(&data, folder)
 }
 
-#[derive(Clone)]
-pub struct Entry {
-    /// The path on the disc, with `/` between its parts, as the disc spells it.
-    pub path: String,
-    sector: u64,
-    pub size: u64,
-}
-
-/// Whether a file's name says it's a disc image or the sheet that goes with one.
-pub fn is_image(path: &Path) -> bool {
-    let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    path.is_file() && matches!(extension.as_str(), "iso" | "bin" | "img" | "mdf" | "cue" | "ccd")
-}
-
-/// The disc image in a folder that holds one, such as a `.bin` beside its
-/// `.cue`: the sheet first (`.cue`, then `.ccd`), since it knows the tracks,
-/// else the only image file there.
-pub fn image_in(folder: &Path) -> Option<PathBuf> {
-    let mut images: Vec<PathBuf> = std::fs::read_dir(folder).ok()?.flatten().map(|entry| entry.path()).filter(|path| is_image(path)).collect();
-    images.sort();
-    let with = |wanted: &str| images.iter().find(|path| path.extension().is_some_and(|e| e.eq_ignore_ascii_case(wanted))).cloned();
-    with("cue").or_else(|| with("ccd")).or_else(|| (images.len() == 1).then(|| images[0].clone()))
-}
-
-/// The file that holds the data: a `.cue` names it in its first FILE line, and
-/// a `.ccd` sits beside an `.img` of the same name.
-fn data_file(path: &Path) -> PathBuf {
-    let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    match extension.as_str() {
-        "cue" => {
-            let sheet = std::fs::read(path).map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default();
-            let named = sheet.lines().find_map(|line| line.trim().strip_prefix("FILE")?.split('"').nth(1).map(str::to_string));
-            named.map_or_else(|| path.with_extension("bin"), |name| path.with_file_name(name))
-        }
-        "ccd" => path.with_extension("img"),
-        _ => path.to_path_buf(),
-    }
-}
-
-impl Disc {
-    pub fn open(path: &Path) -> Result<Disc, String> {
-        let data = data_file(path);
-        let mut file = File::open(&data).map_err(|error| format!("{} can't be opened: {error}", data.display()))?;
-        // The descriptor starts with a type byte and "CD001", wherever the
-        // sector's data begins.
-        for (sector, skip) in [(2048, 0), (2352, 16), (2352, 24), (2336, 8)] {
-            let mut mark = [0u8; 5];
-            let found = file.seek(SeekFrom::Start(DESCRIPTOR_SECTOR * sector + skip + 1)).is_ok() && file.read_exact(&mut mark).is_ok();
-            if found && &mark == b"CD001" {
-                return Ok(Disc { file, sector, skip });
-            }
-        }
-        Err(format!("{} isn't a CD image this can read", data.display()))
-    }
-
-    fn read_sectors(&mut self, mut sector: u64, size: u64) -> std::io::Result<Vec<u8>> {
-        let mut data = vec![0u8; size as usize];
-        for part in data.chunks_mut(LOGICAL as usize) {
-            self.file.seek(SeekFrom::Start(sector * self.sector + self.skip))?;
-            self.file.read_exact(part)?;
-            sector += 1;
-        }
-        Ok(data)
-    }
-
-    pub fn read(&mut self, entry: &Entry) -> std::io::Result<Vec<u8>> {
-        self.read_sectors(entry.sector, entry.size)
-    }
-
-    /// Every file on the disc.
-    pub fn files(&mut self) -> Vec<Entry> {
-        let mut found = Vec::new();
-        if let Ok(descriptor) = self.read_sectors(DESCRIPTOR_SECTOR, LOGICAL) {
-            let (sector, size) = extent(&descriptor[ROOT_RECORD..]);
-            self.walk(sector, size, String::new(), 0, &mut found);
-        }
-        found
-    }
-
-    fn walk(&mut self, sector: u64, size: u64, folder: String, depth: usize, found: &mut Vec<Entry>) {
-        let Ok(data) = self.read_sectors(sector, size) else { return };
-        let mut at = 0;
-        while at + 34 <= data.len() {
-            let length = data[at] as usize;
-            if length == 0 {
-                // Records never cross a sector: the rest of this one is padding.
-                at = (at / LOGICAL as usize + 1) * LOGICAL as usize;
-                continue;
-            }
-            let record = &data[at..(at + length).min(data.len())];
-            at += length;
-            if record.len() < 34 || record.len() < 33 + record[32] as usize {
-                continue;
-            }
-            let name = &record[33..33 + record[32] as usize];
-            if name == [0] || name == [1] {
-                continue; // The folder itself, and the one above it.
-            }
-            let text: String = name.iter().map(|&byte| byte as char).collect();
-            let text = text.split(';').next().unwrap_or_default().trim_end_matches('.').to_string();
-            // Names come from the image, and mustn't lead out of a folder.
-            if text.is_empty() || text == ".." || text.contains(['/', '\\']) {
-                continue;
-            }
-            let (sector, size) = extent(record);
-            let path = if folder.is_empty() { text } else { format!("{folder}/{text}") };
-            if record[25] & FOLDER_FLAG != 0 {
-                if depth < DEEPEST {
-                    self.walk(sector, size, path, depth + 1, found);
-                }
-            } else {
-                found.push(Entry { path, sector, size });
-            }
-        }
-    }
-}
-
-/// Where a directory record's data starts, and its size.
-fn extent(record: &[u8]) -> (u64, u64) {
-    let number = |at: usize| u32::from_le_bytes([record[at], record[at + 1], record[at + 2], record[at + 3]]) as u64;
-    (number(2) + record[1] as u64, number(10))
-}
-
-/// Copies every file of an image into a folder. `progress` gets the bytes
-/// written so far and the total. The files go to a folder beside the target
-/// first, which takes the target's name only when all are there, so a copy
-/// that was interrupted is never taken for a whole game.
+/// `recomp_disc::unpack`, with Z.PAC unpacked.
 pub fn unpack(image: &Path, target: &Path, progress: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
-    let mut disc = Disc::open(image)?;
-    let files = disc.files();
-    let total: u64 = files.iter().map(|entry| entry.size).sum();
-    let partial = target.with_extension("unpacking");
-    let failed = |error: std::io::Error| format!("The disc couldn't be unpacked into {}: {error}", target.display());
-    let _ = std::fs::remove_dir_all(&partial);
-    let mut written = 0;
-    for entry in &files {
-        let path = partial.join(&entry.path);
-        std::fs::create_dir_all(path.parent().unwrap_or(&partial)).map_err(failed)?;
-        let data = disc.read(entry).map_err(|error| format!("The image ends early or can't be read at {}: {error}", entry.path))?;
-        File::create(&path).and_then(|mut file| file.write_all(&data)).map_err(failed)?;
-        written += entry.size;
-        progress(written, total);
-    }
-    // A DOS disc of Z keeps its program and data in Z.PAC, which its installer
-    // unpacked to the hard disk. They go beside the disc's own files: no name
-    // is in both.
-    if let Some(entry) = files.iter().find(|entry| entry.path.eq_ignore_ascii_case("Z.PAC")) {
-        let data = std::fs::read(partial.join(&entry.path)).map_err(failed)?;
-        super::zpac::unpack_into(&data, &partial)?;
-    }
-    std::fs::rename(&partial, target).map_err(failed)
+    unpack_with(image, target, progress, &mut unpack_pac)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn finds_the_image_in_a_folder() {
-        let dir = std::env::temp_dir().join(format!("disc-test-image-in-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(image_in(&dir), None);
-        std::fs::write(dir.join("Game.bin"), b"").unwrap();
-        assert_eq!(image_in(&dir), Some(dir.join("Game.bin")));
-        // The sheet wins over the data it names.
-        std::fs::write(dir.join("Game.CUE"), b"").unwrap();
-        std::fs::write(dir.join("readme.txt"), b"").unwrap();
-        assert_eq!(image_in(&dir), Some(dir.join("Game.CUE")));
-        // Two images and no sheet: no guess.
-        std::fs::remove_file(dir.join("Game.CUE")).unwrap();
-        std::fs::write(dir.join("Other.iso"), b"").unwrap();
-        assert_eq!(image_in(&dir), None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+/// `recomp_disc::copy_folder`, with Z.PAC unpacked.
+pub fn copy_folder(source: &Path, target: &Path, progress: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
+    copy_folder_with(source, target, progress, &mut unpack_pac)
 }
