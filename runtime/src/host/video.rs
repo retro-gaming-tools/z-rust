@@ -62,8 +62,6 @@ const WM_LBUTTONDOWN: u32 = 0x201;
 const WM_LBUTTONUP: u32 = 0x202;
 const WM_RBUTTONDOWN: u32 = 0x204;
 const WM_RBUTTONUP: u32 = 0x205;
-const KEY_F10: u32 = 0x4000_0043;
-const KEY_F11: u32 = 0x4000_0044;
 const STATS_FRAMES: usize = 120;
 const BLEND_NONE: u32 = 0;
 const BLEND_ALPHA: u32 = 1;
@@ -812,13 +810,15 @@ pub(crate) fn handle_event(cpu: &mut Cpu, event: &Event) {
             } else if down {
                 cpu.host.alt_alone = false;
             }
-            if key == KEY_F10 {
+            // The port's own keys, as the launcher's "Hotkeys..." page set them.
+            let hotkey = crate::host::hotkeys::action(key);
+            if hotkey == Some(crate::host::hotkeys::STATS) {
                 if down {
                     toggle_stats(cpu);
                 }
                 return;
             }
-            if key == KEY_F11 {
+            if hotkey == Some(crate::host::hotkeys::FULLSCREEN) {
                 if down {
                     if let Some(video) = cpu.host.video.as_mut() {
                         video.fullscreen = !video.fullscreen;

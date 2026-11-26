@@ -239,7 +239,7 @@ pub(super) fn run(cpu: &mut Cpu, title: &str, text: &str, yes: &str, no: &str) -
                     if event.0[37] != 0 {
                         continue; // A repeat.
                     }
-                    if key == KEY_F10 || key == KEY_F11 {
+                    if crate::host::hotkeys::is_window_key(key) {
                         cpu.host.video = Some(video);
                         handle_event(cpu, &event);
                         video = cpu.host.video.take().unwrap();

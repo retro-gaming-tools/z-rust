@@ -2,6 +2,14 @@
 
 Newest first. Each version has a tag `v<version>`, and `./changes.sh <old> <new>` shows the full diff between two of them.
 
+## 0.61-beta (2026-11-26)
+
+- The README lists each supported release (system, language) with the full SHA-256 of its program, and how to check your own copy. Any dump of a supported disc works: only the program file is checked, not the disc image. `recomp.log` records the program's SHA-256.
+- Fixed the detection of some disc images.
+- `recomp.log` records the command line the port was started with.
+- The launcher can be skipped next time, and the port's hotkeys can be remapped or turned off in its new Hotkeys row.
+- The launcher's title bar has orange lamps instead of stripes.
+
 ## 0.6-beta (2026-11-24)
 
 - Linux: the settings, `recomp.log` and unpacked discs can be kept in the XDG folders (`~/.config/z-rust`, `~/.local/share/z-rust`) instead of beside the program, with the launcher's Advanced row "Files kept" or `--xdg` ([issue #1](https://github.com/retro-gaming-tools/z-rust/issues/1)). Beside the program stays the default.

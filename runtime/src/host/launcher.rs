@@ -4,7 +4,7 @@
 //! 8x8 font, works with the mouse, the keyboard and a controller, and keeps the
 //! choices for next time.
 
-use crate::host::disc;
+use crate::host::{disc, hotkeys};
 use crate::host::video::{symbol, Event};
 use crate::loader::{self, Game, Settings};
 use crate::sys;
@@ -35,6 +35,9 @@ const KEY_DOWN: u32 = 0x4000_0051;
 const KEY_UP: u32 = 0x4000_0052;
 const BUTTON_SOUTH: u8 = 0;
 const BUTTON_EAST: u8 = 1;
+const BUTTON_WEST: u8 = 2;
+const KEY_BACKSPACE: u32 = 8;
+const KEY_DELETE: u32 = 0x7f;
 const BUTTON_START: u8 = 6;
 const BUTTON_UP: u8 = 11;
 const BUTTON_DOWN: u8 = 12;
@@ -94,6 +97,78 @@ pub fn wanted(arguments: &[String]) -> bool {
     !play && !scripted && std::env::var_os("RECOMP_HEADLESS").is_none()
 }
 
+/// Whether this start skips the launcher, as its "Skip launcher next time" row chose, and if so
+/// fills `settings` with what was saved. The launcher still opens with `--launcher`, with Shift
+/// held as the program starts, and when the saved game folder no longer checks out.
+pub fn skipped(game: &Game, arguments: &[String], settings: &mut Settings) -> bool {
+    if arguments.iter().any(|argument| argument.eq_ignore_ascii_case("--launcher")) {
+        return false;
+    }
+    let gave_folder = arguments.iter().any(|argument| !argument.starts_with("--"));
+    load(game, settings, gave_folder);
+    if !settings.skip_launcher {
+        return false;
+    }
+    if shift_held() {
+        note("Shift held: showing the launcher");
+        return false;
+    }
+    let (status, ok) = folder_status(game, &settings.folder);
+    if !ok {
+        note(&format!("launcher skipping is on, but the game folder no longer checks out ({status}): showing it"));
+        return false;
+    }
+    // A disc image or a read-only folder needs the launcher to unpack or copy it.
+    let path = std::path::Path::new(&settings.folder);
+    if disc::is_image(path) || !disc::is_writable(path) {
+        return false;
+    }
+    note("skipped, as chosen; --launcher or Shift at start brings it back");
+    note_settings(game, settings);
+    true
+}
+
+/// Whether a Shift key is held now, before any window of ours is open.
+fn shift_held() -> bool {
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn GetAsyncKeyState(key: i32) -> i16;
+        }
+        const VK_SHIFT: i32 = 0x10;
+        unsafe { GetAsyncKeyState(VK_SHIFT) < 0 }
+    }
+    #[cfg(not(windows))]
+    unsafe {
+        // SDL knows the keyboard only for a window that has the focus, so on Linux this
+        // finds Shift only where the system tells SDL at once; `--launcher` always works.
+        let library = sys::open_sdl();
+        if library.is_null() {
+            return false;
+        }
+        let init: unsafe extern "C" fn(u32) -> bool = symbol(library, "SDL_Init");
+        if !init(INIT_VIDEO) {
+            return false;
+        }
+        let pump: unsafe extern "C" fn() = symbol(library, "SDL_PumpEvents");
+        let modifiers: unsafe extern "C" fn() -> u16 = symbol(library, "SDL_GetModState");
+        pump();
+        const SHIFT: u16 = 0x0003;
+        modifiers() & SHIFT != 0
+    }
+}
+
+/// Reads the hotkeys from the saved settings, for every start, the launcher's or not.
+pub fn load_hotkeys(game: &Game) {
+    let beside = settings_beside_program().and_then(|path| std::fs::read_to_string(path).ok());
+    let Some(text) = beside.or_else(|| settings_path(game).and_then(|path| std::fs::read_to_string(path).ok())) else { return };
+    for line in text.lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            hotkeys::read_setting(key.trim(), value);
+        }
+    }
+}
+
 /// A step of the launcher in `recomp.log`, written at once in case the next one crashes.
 pub(crate) fn note(text: &str) {
     crate::runlog::line(&format!("launcher: {text}"));
@@ -138,6 +213,10 @@ enum Row {
     /// Where settings, `recomp.log` and unpacked discs go: beside the program or in the XDG
     /// folders (Linux only).
     Files,
+    /// Whether later starts go straight into the game. Offered once the game folder checks out.
+    SkipLauncher,
+    /// Opens the page where the port's own keys are chosen.
+    Hotkeys,
     /// Opens the page of settings most players should leave alone.
     Advanced,
     /// Leaves that page.
@@ -400,12 +479,18 @@ impl Sdl {
 /// port gets one in the look of its game, drawn here in code, with no art of
 /// the game's. `style=plain` is flat panels; `style=metal` is riveted metal
 /// plates with bevelled edges and a striped header, for games with metal
-/// menus such as Z. Colours are six hex digits: `background`, `panel`,
+/// menus; `style=iron` is Z's own: a starfield in deep space (the DOS menu)
+/// behind heavy slabs of scratched dark iron (the Z logo and the menu's
+/// blocks), the title cut into an iron slab with hazard stripes at its ends,
+/// and the chosen row's slab lit along its edge in the accent, Z's red.
+/// Colours are six hex digits: `background`, `panel`,
 /// `selected`, `border` (also the accent: the header stripes and the chosen
 /// row's frame), `text`, `value`, `good`, `bad` and `dim`.
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub metal: bool,
+    /// `style=iron`; also sets `metal`, so the plain metal parts are the fallback.
+    pub iron: bool,
     pub background: (u8, u8, u8),
     pub panel: (u8, u8, u8),
     pub selected: (u8, u8, u8),
@@ -420,6 +505,7 @@ pub struct Theme {
 impl Theme {
     const PLAIN: Theme = Theme {
         metal: false,
+        iron: false,
         background: (14, 18, 16),
         panel: (26, 34, 30),
         selected: (46, 92, 64),
@@ -442,7 +528,10 @@ impl Theme {
                 .flatten()
                 .map(|rgb| ((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8));
             match (name.trim(), colour) {
-                ("style", _) => theme.metal = value.eq_ignore_ascii_case("metal"),
+                ("style", _) => {
+                    theme.iron = value.eq_ignore_ascii_case("iron");
+                    theme.metal = theme.iron || value.eq_ignore_ascii_case("metal");
+                }
                 ("background", Some(c)) => theme.background = c,
                 ("panel", Some(c)) => theme.panel = c,
                 ("selected", Some(c)) => theme.selected = c,
@@ -488,6 +577,10 @@ impl Sdl {
     fn background(&self) {
         let theme = theme();
         self.rect([0.0, 0.0, WIDTH, HEIGHT], theme.background, true);
+        if theme.iron {
+            self.space();
+            return;
+        }
         if !theme.metal {
             return;
         }
@@ -506,6 +599,70 @@ impl Sdl {
         }
     }
 
+    /// Deep space as behind Z's DOS menu: a few soft nebula patches in the
+    /// accent's dull purple-red, then stars of three brightnesses, all from a
+    /// fixed sequence so every frame looks the same.
+    fn space(&self) {
+        let theme = theme();
+        let mut seed: u32 = 0x5a5a_1996;
+        let mut next = |range: u32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) % range.max(1)
+        };
+        let nebula = (
+            ((theme.background.0 as u32 * 7 + theme.border.0 as u32) / 8) as u8,
+            theme.background.1,
+            ((theme.background.2 as u32 * 7 + theme.border.0 as u32 / 2) / 8) as u8,
+        );
+        // Small, dim specks clustered round two centres, so they read as haze.
+        for (cx, cy, spread) in [(70.0f32, 330.0f32, 70u32), (450.0, 80.0, 50)] {
+            for _ in 0..500 {
+                let dx = next(spread) as f32 - next(spread) as f32;
+                let dy = (next(spread) as f32 - next(spread) as f32) * 0.6;
+                self.rect([cx + dx, cy + dy, 2.0, 1.0], shade(nebula, next(5) as i32 - 2), true);
+            }
+        }
+        for _ in 0..220 {
+            let (x, y) = (next(WIDTH as u32) as f32, next(HEIGHT as u32) as f32);
+            let star = match next(10) {
+                0 => (235, 235, 245),
+                1..=3 => (150, 150, 165),
+                _ => (80, 80, 92),
+            };
+            self.rect([x, y, 1.0, 1.0], star, true);
+        }
+    }
+
+    /// A slab of dark iron, as the Z logo: bevelled, lit at the top and left,
+    /// with fine scratches across it from a sequence seeded by its place.
+    fn slab(&self, [x, y, w, h]: [f32; 4], colour: (u8, u8, u8)) {
+        self.rect([x, y, w, h], colour, true);
+        let mut seed: u32 = (x as u32).wrapping_mul(7919) ^ (y as u32).wrapping_mul(104_729) ^ 0x2e;
+        let mut next = |range: u32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) % range.max(1)
+        };
+        let count = ((w * h) / 90.0) as u32;
+        for _ in 0..count {
+            let (mut sx, mut sy) = (x + 2.0 + next((w - 4.0).max(1.0) as u32) as f32, y + 2.0 + next((h - 4.0).max(1.0) as u32) as f32);
+            let light = next(3) == 0;
+            for _ in 0..(2 + next(6)) {
+                if sx >= x + w - 2.0 || sy >= y + h - 2.0 {
+                    break;
+                }
+                self.rect([sx, sy, 1.0, 1.0], shade(colour, if light { 16 } else { -12 }), true);
+                sx += 1.0;
+                sy += if next(3) == 0 { 1.0 } else { 0.0 };
+            }
+        }
+        self.line(x, y, x + w - 1.0, y, shade(colour, 50));
+        self.line(x, y + 1.0, x + w - 1.0, y + 1.0, shade(colour, 22));
+        self.line(x, y, x, y + h - 1.0, shade(colour, 35));
+        self.line(x, y + h - 1.0, x + w - 1.0, y + h - 1.0, shade(colour, -40));
+        self.line(x + w - 1.0, y, x + w - 1.0, y + h - 1.0, shade(colour, -40));
+        self.rect([x - 1.0, y - 1.0, w + 2.0, h + 2.0], (6, 6, 8), false);
+    }
+
     /// The title's band at the top: plain text, or a metal bar with hazard
     /// stripes at both ends and the accent along its bottom.
     /// The line reads `TITLE - RUST - version` in every port.
@@ -516,26 +673,61 @@ impl Sdl {
         let left = (WIDTH - width) / 2.0;
         if theme.metal {
             let bar = [0.0, 4.0, WIDTH, 22.0];
-            self.plate(bar, theme.panel);
+            if theme.iron {
+                self.slab([1.0, 4.0, WIDTH - 2.0, 22.0], theme.panel);
+            } else {
+                self.plate(bar, theme.panel);
+            }
             self.line(0.0, 25.0, WIDTH, 25.0, theme.border);
+            if theme.iron {
+                // A lit orange lamp in a dark iron socket at each end, as the
+                // lights on Z's machines, with a soft glow round it.
+                for x in [16.0, WIDTH - 17.0] {
+                    let y = 15.0;
+                    let lamp = theme.value;
+                    self.disc(x, y, 7.0, shade(theme.panel, -14));
+                    self.disc(x, y, 6.0, (12, 12, 14));
+                    self.disc(x, y, 4.0, shade(lamp, -90));
+                    self.disc(x, y, 3.0, lamp);
+                    self.rect([x - 1.0, y - 2.0, 2.0, 1.0], shade(lamp, 110), true);
+                    self.line(x - 6.0, y + 7.0, x + 6.0, y + 7.0, shade(theme.panel, 30));
+                }
+                return self.title_text(left, title, &rest);
+            }
             // Diagonal stripes in the accent colour, up to 30 pixels at each
             // end, shorter when a long title needs the room.
             let reach = (left - 6.0).clamp(0.0, 30.0);
-            for (left, right) in [(2.0f32, 2.0 + reach), (WIDTH - 2.0 - reach, WIDTH - 2.0)] {
-                let mut x = left;
-                while x < right {
-                    for step in 0..18 {
-                        let (px, py) = (x + step as f32 * 0.5, 23.0 - step as f32);
-                        if px < right {
-                            self.rect([px, py, 3.0, 1.0], theme.border, true);
-                        }
+            // The right end is the left one mirrored, so they lean towards the title.
+            let mut x = 2.0f32;
+            while x < 2.0 + reach {
+                for step in 0..18 {
+                    let (px, py) = (x + step as f32 * 0.5, 23.0 - step as f32);
+                    if px < 2.0 + reach {
+                        self.rect([px, py, 3.0, 1.0], theme.border, true);
+                        self.rect([WIDTH - px - 3.0, py, 3.0, 1.0], theme.border, true);
                     }
-                    x += 8.0;
                 }
+                x += 8.0;
             }
         }
+        self.title_text(left, title, &rest);
+    }
+
+    /// `TITLE - RUST - version`, the title in the value colour.
+    fn title_text(&self, left: f32, title: &str, rest: &str) {
+        let theme = theme();
         self.write(left, 12.0, title, theme.value);
-        self.write(left + title.len() as f32 * CHARACTER, 12.0, &rest, theme.dim);
+        self.write(left + title.len() as f32 * CHARACTER, 12.0, rest, theme.dim);
+    }
+
+    /// A filled disc, drawn as one line per pixel row.
+    fn disc(&self, cx: f32, cy: f32, radius: f32, colour: (u8, u8, u8)) {
+        let mut dy = -radius;
+        while dy <= radius {
+            let half = (radius * radius - dy * dy).max(0.0).sqrt().round();
+            self.rect([cx - half, cy + dy, 2.0 * half + 1.0, 1.0], colour, true);
+            dy += 1.0;
+        }
     }
 
     /// A raised metal plate: lit at the top and left, shadowed at the other
@@ -558,6 +750,21 @@ impl Sdl {
     fn panel(&self, area: [f32; 4], chosen: bool) {
         let theme = theme();
         let colour = if chosen { theme.selected } else { theme.panel };
+        if theme.iron {
+            // An iron slab; the chosen one lit red along its edge, with a
+            // red marker at its left, as Z's red team colours a selection.
+            self.slab(area, colour);
+            if chosen {
+                let [x, y, w, h] = area;
+                self.rect([x - 1.0, y - 1.0, w + 2.0, h + 2.0], theme.border, false);
+                self.rect([x - 2.0, y - 2.0, w + 4.0, h + 4.0], shade(theme.border, -110), false);
+                for step in 0..4 {
+                    let s = step as f32;
+                    self.rect([x - 8.0 + s, y + h / 2.0 - 3.0 + s * 0.75, 1.0, 6.0 - s * 1.5], theme.border, true);
+                }
+            }
+            return;
+        }
         if theme.metal {
             self.plate(area, colour);
             if chosen {
@@ -822,6 +1029,8 @@ fn load(game: &Game, settings: &mut Settings, arguments_gave_folder: bool) {
             "folder" if !arguments_gave_folder && !value.trim().is_empty() => settings.folder = value.trim().to_string(),
             "scale" => settings.scale = value.trim().parse().unwrap_or(settings.scale).clamp(FIRST_SCALE, LAST_SCALE),
             "fullscreen" => settings.fullscreen = value.trim() == "1",
+            "skip_launcher" => settings.skip_launcher = value.trim() == "1",
+            name if hotkeys::read_setting(name, value) => {}
             "drawing" if !std::env::args().any(|argument| argument.starts_with("--drawing=")) => settings.processor = value.trim() == "processor",
             "renderer" if !arguments_gave_renderer => settings.renderer = loader::find_choice(game.renderers, value.trim()).unwrap_or(settings.renderer),
             "language" if !arguments_gave_language => settings.language = loader::find_choice(game.languages, value.trim()).unwrap_or(settings.language),
@@ -858,6 +1067,8 @@ fn save(game: &Game, settings: &Settings) {
     for ((file, ..), on) in game.mods.iter().zip(&settings.mods) {
         text.push_str(&format!("mod.{file}={}\n", *on as u8));
     }
+    text.push_str(&format!("skip_launcher={}\n", settings.skip_launcher as u8));
+    text.push_str(&hotkeys::setting_lines());
     // The "Files kept" row moves the settings, and later logs and unpacked discs; this run's
     // log stays where it was opened.
     if settings.xdg != xdg_on() {
@@ -911,6 +1122,8 @@ fn rows(game: &Game, advanced: bool) -> Vec<Row> {
     }
     rows.extend((0..game.switches.len()).map(Row::Switch));
     rows.extend(mods(false));
+    // Hotkeys sit on the first page, just above Advanced (user, 2026-11-26).
+    rows.extend([Row::SkipLauncher, Row::Hotkeys]);
     if !more.is_empty() {
         rows.push(Row::Advanced);
     }
@@ -957,9 +1170,15 @@ fn draw(sdl: &Sdl, game: &Game, settings: &Settings, status: &(String, bool), wa
                 sdl.write(left, top + 34.0, &shorten(&status.0), if status.1 { theme().good } else { theme().bad });
             }
             Row::File => sdl.write(left, line, "Choose a disc image or game file", theme().text),
-            Row::Scale | Row::Drawing | Row::Display | Row::Renderer | Row::Language | Row::Switch(_) | Row::Mod(_) | Row::Files => {
+            Row::SkipLauncher if !status.1 => {
+                // Offered only once the game folder checks out.
+                sdl.write(left, line, "Skip launcher next time", theme().dim);
+                sdl.write_right(line, "Off", theme().dim);
+            }
+            Row::Scale | Row::Drawing | Row::Display | Row::Renderer | Row::Language | Row::Switch(_) | Row::Mod(_) | Row::Files | Row::SkipLauncher => {
                 let label = match row {
                     Row::Files => "Files kept",
+                    Row::SkipLauncher => "Skip launcher next time",
                     Row::Scale => "3D resolution",
                     Row::Drawing => "3D drawn by",
                     Row::Display => "Display",
@@ -987,9 +1206,10 @@ fn draw(sdl: &Sdl, game: &Game, settings: &Settings, status: &(String, bool), wa
                 let colour = if status.1 { theme().good } else { theme().dim };
                 sdl.write((WIDTH - label.len() as f32 * CHARACTER) / 2.0, line, label, colour);
             }
-            Row::Advanced | Row::Back | Row::Quit => {
+            Row::Advanced | Row::Hotkeys | Row::Back | Row::Quit => {
                 let label = match row {
                     Row::Advanced => "Advanced settings...",
+                    Row::Hotkeys => "Hotkeys...",
                     Row::Back => "Back",
                     _ => "Quit",
                 };
@@ -1084,6 +1304,7 @@ fn value_text(game: &Game, row: Row, settings: &Settings) -> Option<String> {
         Row::Switch(switch) => (if settings.switches[switch] { "On" } else { "Off" }).to_string(),
         Row::Mod(index) => (if settings.mods[index] { "On" } else { "Off" }).to_string(),
         Row::Files => (if settings.xdg { "Home (XDG)" } else { "Beside program" }).to_string(),
+        Row::SkipLauncher => (if settings.skip_launcher { "On" } else { "Off" }).to_string(),
         _ => return None,
     };
     Some(format!("< {value} >"))
@@ -1138,11 +1359,123 @@ fn change(sdl: &Sdl, game: &Game, row: Row, step: i32, settings: &mut Settings, 
         Row::Switch(index) => settings.switches[index] = !settings.switches[index],
         Row::Mod(index) => settings.mods[index] = !settings.mods[index],
         Row::Files => settings.xdg = !settings.xdg,
+        Row::SkipLauncher if ready => settings.skip_launcher = !settings.skip_launcher,
+        Row::Hotkeys if step == 0 => hotkey_page(sdl, game),
         Row::Start if step == 0 && ready => return Some(true),
         Row::Quit if step == 0 => return Some(false),
         _ => {}
     }
     None
+}
+
+/// The "Hotkeys..." page: one row per key the port adds, then "Reset to defaults" and
+/// "Back". Enter or a click on a row waits for the next key, which becomes that hotkey's;
+/// Escape cancels the wait, or leaves the page. The keys are saved with the other settings
+/// when the game starts.
+fn hotkey_page(sdl: &Sdl, game: &Game) {
+    let count = hotkeys::HOTKEYS.len() + 2;
+    let (reset, back) = (count - 2, count - 1);
+    let mut selected = 0;
+    let mut waiting = false;
+    let mut event = Event([0; 128]);
+    loop {
+        while unsafe { (sdl.poll)(&mut event) } {
+            unsafe { (sdl.convert)(sdl.renderer, &mut event) };
+            let kind = event.u32_at(0);
+            if waiting {
+                if kind == EVENT_KEY_DOWN {
+                    let key = event.u32_at(28);
+                    if key != KEY_ESCAPE {
+                        hotkeys::set(selected, key);
+                        note(&format!("hotkey {} set to {}", hotkeys::HOTKEYS[selected].name, hotkeys::display_name(key)));
+                    }
+                    waiting = false;
+                } else if kind == EVENT_GAMEPAD_BUTTON_DOWN && event.0[20] == BUTTON_EAST {
+                    waiting = false;
+                } else if kind == EVENT_QUIT {
+                    return;
+                }
+                continue;
+            }
+            // Delete, Backspace or X turns the chosen hotkey off: no key triggers it.
+            let clear = match kind {
+                EVENT_KEY_DOWN => matches!(event.u32_at(28), KEY_DELETE | KEY_BACKSPACE),
+                EVENT_GAMEPAD_BUTTON_DOWN => event.0[20] == BUTTON_WEST,
+                _ => false,
+            };
+            if clear && selected < reset {
+                hotkeys::set(selected, hotkeys::NONE);
+                note(&format!("hotkey {} turned off", hotkeys::HOTKEYS[selected].name));
+                continue;
+            }
+            // (movement, press, leave)
+            let action = match kind {
+                EVENT_QUIT => return,
+                EVENT_KEY_DOWN => match event.u32_at(28) {
+                    KEY_UP => Some((-1, false, false)),
+                    KEY_DOWN => Some((1, false, false)),
+                    KEY_RETURN | KEY_SPACE => Some((0, true, false)),
+                    KEY_ESCAPE => Some((0, false, true)),
+                    _ => None,
+                },
+                EVENT_GAMEPAD_BUTTON_DOWN => match event.0[20] {
+                    BUTTON_UP => Some((-1, false, false)),
+                    BUTTON_DOWN => Some((1, false, false)),
+                    BUTTON_SOUTH => Some((0, true, false)),
+                    BUTTON_EAST | BUTTON_START => Some((0, false, true)),
+                    _ => None,
+                },
+                EVENT_MOUSE_MOTION | EVENT_MOUSE_BUTTON_DOWN => {
+                    let (x, y) = (event.f32_at(28), event.f32_at(32));
+                    let hit = (0..count).find(|index| {
+                        let (top, height) = place(*index, count, true);
+                        (MARGIN..WIDTH - MARGIN).contains(&x) && (top..top + height).contains(&y)
+                    });
+                    hit.and_then(|index| {
+                        selected = index;
+                        (kind == EVENT_MOUSE_BUTTON_DOWN).then_some((0, true, false))
+                    })
+                }
+                _ => None,
+            };
+            let Some((movement, press, leave)) = action else { continue };
+            if leave || (press && selected == back) {
+                return;
+            }
+            if movement != 0 {
+                selected = (selected as i32 + movement).rem_euclid(count as i32) as usize;
+            } else if press && selected == reset {
+                hotkeys::reset();
+                note("hotkeys reset");
+            } else if press {
+                waiting = true;
+            }
+        }
+        sdl.background();
+        sdl.header(&game.title.to_uppercase(), game.version);
+        let left = MARGIN + 4.0;
+        sdl.write(left, FOLDER_TOP + 4.0, "Hotkeys", theme().text);
+        sdl.write(left, FOLDER_TOP + 17.0, "The keys this port adds.", theme().dim);
+        sdl.write(left, FOLDER_TOP + 30.0, "Move one that clashes with the game.", theme().dim);
+        let keys = hotkeys::all();
+        for index in 0..count {
+            let (top, height) = place(index, count, true);
+            sdl.panel([MARGIN, top, WIDTH - 2.0 * MARGIN, height], index == selected);
+            let line = top + (height - CHARACTER) / 2.0;
+            if index < reset {
+                sdl.write(left, line, hotkeys::HOTKEYS[index].label, theme().text);
+                let value = if waiting && index == selected { "Press a key".to_string() } else { hotkeys::display_name(keys[index]) };
+                sdl.write_right(line, &value, theme().value);
+            } else {
+                let label = if index == reset { "Reset to defaults" } else { "Back" };
+                sdl.write((WIDTH - label.len() as f32 * CHARACTER) / 2.0, line, label, theme().text);
+            }
+        }
+        let hint = if waiting { "Press the new key, Esc to cancel" } else { "Enter: change  Del/X: none  Esc: back" };
+        sdl.write((WIDTH - hint.len() as f32 * CHARACTER) / 2.0, HEIGHT - 20.0, hint, theme().dim);
+        unsafe { (sdl.present)(sdl.renderer) };
+        unsafe { (sdl.delay)(FRAME_MILLISECONDS) };
+    }
 }
 
 pub fn show(game: &Game, mut settings: Settings) -> Outcome {

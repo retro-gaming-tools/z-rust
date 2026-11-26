@@ -398,7 +398,7 @@ pub fn step(cpu: &mut Cpu, view: &View, panel: &mut Panel) -> Vec<Action> {
             }
             EVENT_KEY_DOWN => {
                 let key = event.u32_at(28);
-                if key == KEY_F10 || key == KEY_F11 {
+                if crate::host::hotkeys::is_window_key(key) {
                     cpu.host.video = Some(video);
                     handle_event(cpu, &event);
                     video = cpu.host.video.take().unwrap();

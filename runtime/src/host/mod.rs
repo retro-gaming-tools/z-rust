@@ -8,6 +8,7 @@ pub mod dinput;
 pub mod gamepad;
 mod gl;
 pub mod glide;
+pub mod hotkeys;
 mod glide_gl;
 mod glide_raster;
 mod kernel32;

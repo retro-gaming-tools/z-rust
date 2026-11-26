@@ -28,7 +28,7 @@ static GAME: loader::Game = loader::Game {
     music: &[],
     registry: &[("SOFTWARE\\Bitmap Brothers\\Z\\v1.0\\WinZPaths\\War", "C:\\GAME\\Z\\"), ("SOFTWARE\\Bitmap Brothers\\Z\\v1.0\\WinZPaths\\Cuts", "D:\\"), ("SOFTWARE\\Bitmap Brothers\\Z\\v1.0\\WinZPaths\\SeenIntro", "dword:1")],
     cd: "Z95VOLUME",
-    theme: "style=metal;background=26262c;panel=46464e;selected=6e4420;border=f08c28;text=e8e4dc;value=ff7a3c;good=9be05a;bad=ff4632;dim=948e86",
+    theme: "style=iron;background=07070c;panel=34343a;selected=4a2622;border=e0301e;text=e8e4dc;value=ff7a3c;good=9be05a;bad=ff4632;dim=948e86",
 };
 
 fn main() {

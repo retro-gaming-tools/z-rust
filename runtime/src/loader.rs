@@ -117,6 +117,20 @@ pub(crate) fn default_folder(game: &Game) -> String {
     found.unwrap_or_else(|| "game".to_string())
 }
 
+/// Writes a checked file's hash to `recomp.log`, so a player's log says which
+/// version they have even when it isn't a supported one. Once per file and
+/// contents, since the launcher checks again whenever the folder changes.
+fn log_hash(module: &Module, place: &str, size: usize, found: &str) {
+    static LOGGED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let key = format!("{} {place} {found}", module.file);
+    let mut logged = LOGGED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !logged.contains(&key) {
+        let verdict = if found == module.sha256 { "supported" } else { "different version" };
+        crate::runlog::line(&format!("checked {} ({place}): {size} bytes, sha256 {found}, {verdict}", module.file));
+        logged.push(key);
+    }
+}
+
 /// Checks the files the code was recompiled from, before anything starts.
 pub(crate) fn check_files(game: &Game, folder: &str) -> Result<(), String> {
     let mut missing = Vec::new();
@@ -125,8 +139,9 @@ pub(crate) fn check_files(game: &Game, folder: &str) -> Result<(), String> {
         match find_file(folder, module.file) {
             None => missing.push(module.file),
             Some(path) => {
-                let file = std::fs::read(path).unwrap_or_default();
+                let file = std::fs::read(&path).unwrap_or_default();
                 let found: String = Sha256::digest(&file).iter().map(|byte| format!("{byte:02x}")).collect();
+                log_hash(module, &path.display().to_string(), file.len(), &found);
                 if found != module.sha256 {
                     different.push(module.file);
                 }
@@ -195,6 +210,7 @@ fn image_program(game: &Game, image: &std::path::Path) -> Result<&'static [Modul
                 }
             };
             let found: String = Sha256::digest(&data).iter().map(|byte| format!("{byte:02x}")).collect();
+            log_hash(module, &image.display().to_string(), data.len(), &found);
             if found != module.sha256 {
                 problem = "This disc is a different version".to_string();
                 continue 'programs;
@@ -386,11 +402,15 @@ fn start(game: &'static Game, folder: String, switches: Vec<bool>, mods: Vec<boo
     cpu.host.registry = host::registry::Registry::load(&cpu.host.folder, game.registry);
     cpu.host.mods_off = game.mods.iter().zip(mods).filter(|(_, on)| !on).map(|((file, ..), _)| *file).collect();
     let entry = images[0].1.entry;
+    if !images[0].1.is_dos() {
+        crate::runlog::line(&format!("command: {command}"));
+    }
     if images[0].1.is_dos() {
         // DOS's start: the PSP, the environment and the selectors, with the
         // program as `Z.BAT` and friends named it.
         let program = format!("C:\\{}", images[0].0.to_uppercase());
         let arguments = std::env::var("RECOMP_DOS_ARGUMENTS").unwrap_or_else(|_| dos_arguments(&cpu.host.folder.to_string_lossy()));
+        crate::runlog::line(&format!("command: {program} {arguments}"));
         host::dos::start(&mut cpu, &images[0].1, &program, &arguments);
     }
     for (name, image) in images {
@@ -432,6 +452,8 @@ pub struct Settings {
     pub processor: bool,
     /// Whether settings, `recomp.log` and unpacked discs go to the XDG folders (Linux).
     pub xdg: bool,
+    /// Whether later starts go straight into the game, past the launcher.
+    pub skip_launcher: bool,
     /// One for each of the game's switches.
     pub switches: Vec<bool>,
     /// An index into the game's renderers.
@@ -475,6 +497,7 @@ fn settings_from_arguments(game: &Game, arguments: &[String]) -> Settings {
         fullscreen: has("--fullscreen"),
         processor: has("--drawing=processor"),
         xdg: host::launcher::xdg_on(),
+        skip_launcher: false,
         switches: game.switches.iter().map(|(name, _, _)| has(name)).collect(),
         renderer: arguments.iter().find_map(|argument| find_choice(game.renderers, argument.strip_prefix("--renderer=")?)).unwrap_or(0),
         language: arguments.iter().find_map(|argument| find_choice(game.languages, argument.strip_prefix("--language=")?)).unwrap_or(0),
@@ -493,6 +516,8 @@ pub fn run(game: &'static Game) {
     report_crashes(game.title);
     let mut settings = settings_from_arguments(game, &arguments);
     host::launcher::snapshot(game, &settings);
+    // The port's keys as the player set them, with or without the launcher.
+    host::launcher::load_hotkeys(game);
     if host::launcher::wanted(&arguments) {
         // The launcher guesses no folder: it shows the one saved last time, or none to choose.
         if !arguments.iter().any(|argument| !argument.starts_with("--")) {
@@ -501,10 +526,12 @@ pub fn run(game: &'static Game) {
         // A player starts in fullscreen unless they chose a window before
         // (the saved setting wins) or asked for one with `--window`.
         settings.fullscreen = !arguments.iter().any(|argument| argument == "--window");
-        match host::launcher::show(game, settings) {
-            host::launcher::Outcome::Start(chosen) => settings = chosen,
-            host::launcher::Outcome::Quit => std::process::exit(0),
-            host::launcher::Outcome::Unavailable(unchanged) => settings = unchanged,
+        if !host::launcher::skipped(game, &arguments, &mut settings) {
+            match host::launcher::show(game, settings) {
+                host::launcher::Outcome::Start(chosen) => settings = chosen,
+                host::launcher::Outcome::Quit => std::process::exit(0),
+                host::launcher::Outcome::Unavailable(unchanged) => settings = unchanged,
+            }
         }
     }
     // The graphics code reads these when the game opens its window.
@@ -555,7 +582,7 @@ pub fn run(game: &'static Game) {
             }
         }
     }
-    crate::runlog::line(&format!("game folder: {folder}\ncommand: {command}"));
+    crate::runlog::line(&format!("game folder: {folder}"));
     if let Err(text) = check_files(game, &folder) {
         crate::runlog::line(&text);
         host::video::show_error(game.title, &text);
