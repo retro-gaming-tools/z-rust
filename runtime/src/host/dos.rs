@@ -57,6 +57,9 @@ pub struct Dos {
     pub(crate) drive: u8,
     /// The CD drive, which is the disc folder: the folder above the program's.
     pub(crate) cd_drive: Option<u8>,
+    /// The disc's own folder, for an installed copy whose folder holds only what the
+    /// installer copied: the CD drive is this folder, and every other drive the game's.
+    pub(crate) disc_folder: Option<std::path::PathBuf>,
     /// Each drive's current folder, without drive or leading backslash.
     pub(crate) folders: HashMap<u8, String>,
 }

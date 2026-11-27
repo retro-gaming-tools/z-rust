@@ -2,7 +2,7 @@
   "name": "z",
   "title": "Z",
   "needs": "Z by the Bitmap Brothers: the Windows 95 release (WINZ.EXE dated 1998-03-02) or the German or English DOS release (the Steam release isn't supported)",
-  "recompVersion": "0.61-beta",
+  "recompVersion": "0.62-beta",
   "recompRepo": "retro-gaming-tools/z-rust",
   "recompCommand": "Z\\WINZ.EXE",
   "recompRegistry": [

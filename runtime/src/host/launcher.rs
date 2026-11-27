@@ -78,8 +78,25 @@ const LAST_SCALE: u32 = 6;
 /// An organisation name for the settings folder, shared by every recompiled game.
 const SETTINGS_OWNER: &str = "Recompiled Games";
 const USER_SETTINGS_FILE: &str = "launcher.ini";
-/// Beside the program.
-const SETTINGS_FILE: &str = "settings.ini";
+/// The shared name earlier builds kept beside the program; read only when the program's own
+/// file isn't there yet, so its settings carry over.
+const OLD_SETTINGS_FILE: &str = "settings.ini";
+
+/// The started program's name without its extension (`z-rust`), so that two ports' programs
+/// in one folder keep their own settings and logs. Inside an AppImage this is the program in
+/// the mount, whose name stays the same from one release to the next.
+pub(crate) fn program_name() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|program| program.file_stem().map(|stem| stem.to_string_lossy().into_owned()))
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "recomp".to_string())
+}
+
+/// The settings file beside the program: `<program>.settings.ini`.
+fn settings_file() -> String {
+    format!("{}.settings.ini", program_name())
+}
 /// Marks a settings file as the launcher's, so a game's own file of that name is never overwritten.
 const SETTINGS_HEADER: &str = "; Launcher settings for this recompiled game\n";
 
@@ -160,7 +177,7 @@ fn shift_held() -> bool {
 
 /// Reads the hotkeys from the saved settings, for every start, the launcher's or not.
 pub fn load_hotkeys(game: &Game) {
-    let beside = settings_beside_program().and_then(|path| std::fs::read_to_string(path).ok());
+    let beside = read_beside_program();
     let Some(text) = beside.or_else(|| settings_path(game).and_then(|path| std::fs::read_to_string(path).ok())) else { return };
     for line in text.lines() {
         if let Some((key, value)) = line.split_once('=') {
@@ -177,6 +194,9 @@ pub(crate) fn note(text: &str) {
 fn note_settings(game: &Game, settings: &Settings) {
     let renderer = game.renderers.get(settings.renderer).map_or("the game's only one", |(_, label)| *label);
     note(&format!("game {:?}, renderer {renderer}, scale {}, fullscreen {}, 3D on the processor {}", settings.folder, settings.scale, settings.fullscreen, settings.processor));
+    if !settings.disc.is_empty() {
+        note(&format!("disc {:?}", settings.disc));
+    }
 }
 
 /// Why SDL couldn't do what was asked.
@@ -202,6 +222,8 @@ enum Row {
     Folder,
     /// Picks a disc image, or a folder by a file in it.
     File,
+    /// Picks the disc of an installed DOS copy, which the game reads as its CD drive.
+    Disc,
     Scale,
     /// Whether the graphics card or the processor draws Glide.
     Drawing,
@@ -338,6 +360,16 @@ unsafe extern "C" fn folder_picked(_: *mut c_void, list: *const *const c_char, _
     }
     let folder = CStr::from_ptr(*list).to_string_lossy().into_owned();
     *PICKED.lock().unwrap() = Some(folder);
+}
+
+/// Where the disc of an installed copy arrives from the file dialog.
+static PICKED_DISC: Mutex<Option<String>> = Mutex::new(None);
+
+unsafe extern "C" fn disc_picked(_: *mut c_void, list: *const *const c_char, _: c_int) {
+    if list.is_null() || (*list).is_null() {
+        return;
+    }
+    *PICKED_DISC.lock().unwrap() = Some(CStr::from_ptr(*list).to_string_lossy().into_owned());
 }
 
 struct Sdl {
@@ -810,6 +842,19 @@ fn recognised_version(place: &str) -> Option<String> {
     Some(format!("DOS version{language}{gold}"))
 }
 
+/// The game's state: the folder's, and for an installed copy also its disc's.
+fn game_status(game: &Game, settings: &Settings) -> (String, bool) {
+    let status = folder_status(game, &settings.folder);
+    if !status.1 || !installed(game, &settings.folder) {
+        return status;
+    }
+    match found_disc(game, &settings.disc) {
+        Ok(_) => (format!("{}, installed", status.0), true),
+        Err(_) if settings.disc.is_empty() => ("Installed copy: choose its CD".to_string(), false),
+        Err(problem) => (problem, false),
+    }
+}
+
 /// The folder's state, in a line short enough for the screen.
 fn folder_status(game: &Game, folder: &str) -> (String, bool) {
     let recognised = recognised_version(folder);
@@ -896,6 +941,20 @@ fn shorten(text: &str) -> String {
     format!("...{tail}")
 }
 
+/// The disc row's value: the last part of the disc's path, which fits beside the label.
+fn disc_name(place: &str) -> String {
+    let name = std::path::Path::new(place).file_name().map_or(place.to_string(), |name| name.to_string_lossy().into_owned());
+    let count = name.chars().count();
+    if count <= DISC_NAME_LONGEST {
+        return name;
+    }
+    let start: String = name.chars().take(DISC_NAME_LONGEST - 3).collect();
+    format!("{start}...")
+}
+
+/// Characters of a disc's name on the disc row, right of its label.
+const DISC_NAME_LONGEST: usize = 28;
+
 fn absolute(folder: &str) -> String {
     let full = std::fs::canonicalize(folder).map_or(folder.to_string(), |path| path.display().to_string());
     // Windows gives the long-path form, which nobody types.
@@ -944,7 +1003,9 @@ fn xdg_paths(game: &Game) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
 pub(crate) fn choose_folders(game: &Game, arguments: &[String]) {
     let asked = arguments.iter().any(|argument| argument.eq_ignore_ascii_case("--xdg"));
     let Some((config, _)) = xdg_paths(game) else { return };
-    let chosen = std::fs::read_to_string(config.join(SETTINGS_FILE)).is_ok_and(|text| text.starts_with(SETTINGS_HEADER));
+    let chosen = [settings_file(), OLD_SETTINGS_FILE.to_string()]
+        .iter()
+        .any(|name| std::fs::read_to_string(config.join(name)).is_ok_and(|text| text.starts_with(SETTINGS_HEADER)));
     if asked || chosen {
         set_xdg(game, true);
     }
@@ -956,7 +1017,7 @@ pub(crate) fn choose_folders(game: &Game, arguments: &[String]) {
 /// folder, with any unpacked discs, is left alone.
 fn set_xdg(game: &Game, on: bool) {
     let Some((config, data)) = xdg_paths(game) else { return };
-    let marker = config.join(SETTINGS_FILE);
+    let marker = config.join(settings_file());
     if on {
         let made = std::fs::create_dir_all(&config).is_ok() && std::fs::create_dir_all(&data).is_ok();
         if made && (marker.exists() || std::fs::write(&marker, SETTINGS_HEADER).is_ok()) {
@@ -966,8 +1027,10 @@ fn set_xdg(game: &Game, on: bool) {
         }
     } else {
         *XDG.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        if std::fs::read_to_string(&marker).is_ok_and(|text| text.starts_with(SETTINGS_HEADER)) {
-            let _ = std::fs::remove_file(&marker);
+        for marker in [marker, config.join(OLD_SETTINGS_FILE)] {
+            if std::fs::read_to_string(&marker).is_ok_and(|text| text.starts_with(SETTINGS_HEADER)) {
+                let _ = std::fs::remove_file(&marker);
+            }
         }
         let _ = std::fs::remove_dir(&config);
     }
@@ -994,9 +1057,19 @@ fn settings_beside_program() -> Option<std::path::PathBuf> {
         Some((config, _)) => config,
         None => program_folder()?,
     };
-    let path = folder.join(SETTINGS_FILE);
+    let path = folder.join(settings_file());
     let ours = std::fs::read_to_string(&path).map_or(!path.exists(), |text| text.starts_with(SETTINGS_HEADER));
     ours.then_some(path)
+}
+
+/// The saved settings beside the program (or in the XDG settings folder): the program's own
+/// file, else the shared `settings.ini` of earlier builds when it's the launcher's.
+fn read_beside_program() -> Option<String> {
+    let path = settings_beside_program()?;
+    std::fs::read_to_string(&path).ok().or_else(|| {
+        let old = std::fs::read_to_string(path.with_file_name(OLD_SETTINGS_FILE)).ok()?;
+        old.starts_with(SETTINGS_HEADER).then_some(old)
+    })
 }
 
 /// SDL's settings folder for the game, used when the program's folder can't be written, and
@@ -1021,12 +1094,13 @@ fn settings_path(game: &Game) -> Option<std::path::PathBuf> {
 fn load(game: &Game, settings: &mut Settings, arguments_gave_folder: bool) {
     let arguments_gave_renderer = std::env::args().any(|argument| argument.starts_with("--renderer="));
     let arguments_gave_language = std::env::args().any(|argument| argument.starts_with("--language="));
-    let beside = settings_beside_program().and_then(|path| std::fs::read_to_string(path).ok());
+    let beside = read_beside_program();
     let Some(text) = beside.or_else(|| settings_path(game).and_then(|path| std::fs::read_to_string(path).ok())) else { return };
     for line in text.lines() {
         let Some((key, value)) = line.split_once('=') else { continue };
         match key.trim() {
             "folder" if !arguments_gave_folder && !value.trim().is_empty() => settings.folder = value.trim().to_string(),
+            "disc" if settings.disc.is_empty() => settings.disc = value.trim().to_string(),
             "scale" => settings.scale = value.trim().parse().unwrap_or(settings.scale).clamp(FIRST_SCALE, LAST_SCALE),
             "fullscreen" => settings.fullscreen = value.trim() == "1",
             "skip_launcher" => settings.skip_launcher = value.trim() == "1",
@@ -1054,6 +1128,9 @@ fn load(game: &Game, settings: &mut Settings, arguments_gave_folder: bool) {
 
 fn save(game: &Game, settings: &Settings) {
     let mut text = format!("{SETTINGS_HEADER}folder={}\nscale={}\nfullscreen={}\n", absolute(&settings.folder), settings.scale, settings.fullscreen as u8);
+    if !settings.disc.is_empty() {
+        text.push_str(&format!("disc={}\n", absolute(&settings.disc)));
+    }
     text.push_str(&format!("drawing={}\n", if settings.processor { "processor" } else { "card" }));
     if let Some((_, label)) = game.renderers.get(settings.renderer) {
         text.push_str(&format!("renderer={label}\n"));
@@ -1092,11 +1169,42 @@ const ROW_GAP: f32 = 2.0;
 /// Where the rows must end, above the two hint lines.
 const ROWS_BOTTOM: f32 = HEIGHT - 30.0;
 
+/// Whether the folder is an installed DOS copy that needs its disc chosen too, remembered for
+/// the last folder asked about, since the rows are drawn every frame and the check reads the
+/// whole program.
+fn installed(game: &Game, folder: &str) -> bool {
+    static LAST: Mutex<Option<(String, bool)>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap();
+    match &*last {
+        Some((known, answer)) if known == folder => *answer,
+        _ => {
+            let answer = loader::installed_without_disc(game, folder);
+            *last = Some((folder.to_string(), answer));
+            answer
+        }
+    }
+}
+
+/// The disc found for an installed copy, as `loader::disc_for` finds it, remembered as
+/// `installed` is: it may look through every unpacked disc beside the program.
+fn found_disc(game: &Game, chosen: &str) -> Result<String, String> {
+    static LAST: Mutex<Option<(String, Result<String, String>)>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap();
+    if let Some((known, answer)) = &*last {
+        if known == chosen {
+            return answer.clone();
+        }
+    }
+    let answer = loader::disc_for(game, chosen);
+    *last = Some((chosen.to_string(), answer.clone()));
+    answer
+}
+
 /// The rows of the first page, or of the advanced one. That page holds what
 /// the defaults get right for nearly everyone: who draws the 3D, the game's
 /// renderer, and the mods marked `launcher-advanced`. The first page offers
 /// it only if it has rows.
-fn rows(game: &Game, advanced: bool) -> Vec<Row> {
+fn rows(game: &Game, settings: &Settings, advanced: bool) -> Vec<Row> {
     let mut more = Vec::new();
     // Only Glide is drawn by the runtime, so only it can go to the graphics card.
     if game.renderers.iter().any(|(_, label)| label.eq_ignore_ascii_case("Glide")) {
@@ -1116,7 +1224,15 @@ fn rows(game: &Game, advanced: bool) -> Vec<Row> {
     }
     // The 3D resolution is Glide's, so only a game that draws with it gets the row.
     let glide = game.renderers.iter().any(|(_, label)| label.eq_ignore_ascii_case("Glide"));
-    let mut rows = if glide { vec![Row::Folder, Row::File, Row::Scale, Row::Display] } else { vec![Row::Folder, Row::File, Row::Display] };
+    let mut rows = vec![Row::Folder, Row::File];
+    // Only an installed DOS copy needs its disc chosen too.
+    if installed(game, &settings.folder) {
+        rows.push(Row::Disc);
+    }
+    if glide {
+        rows.push(Row::Scale);
+    }
+    rows.push(Row::Display);
     if game.languages.len() > 1 {
         rows.push(Row::Language);
     }
@@ -1147,7 +1263,7 @@ fn place(index: usize, count: usize, advanced: bool) -> (f32, f32) {
 fn draw(sdl: &Sdl, game: &Game, settings: &Settings, status: &(String, bool), warning: &Option<[String; 2]>, selected: usize, advanced: bool) {
     sdl.background();
     sdl.header(&game.title.to_uppercase(), game.version);
-    let all = rows(game, advanced);
+    let all = rows(game, settings, advanced);
     if advanced {
         let left = MARGIN + 4.0;
         sdl.write(left, FOLDER_TOP + 4.0, "Advanced settings", theme().text);
@@ -1170,6 +1286,14 @@ fn draw(sdl: &Sdl, game: &Game, settings: &Settings, status: &(String, bool), wa
                 sdl.write(left, top + 34.0, &shorten(&status.0), if status.1 { theme().good } else { theme().bad });
             }
             Row::File => sdl.write(left, line, "Choose a disc image or game file", theme().text),
+            Row::Disc => {
+                sdl.write(left, line, "CD", theme().text);
+                let (value, colour) = match found_disc(game, &settings.disc) {
+                    Ok(place) => (disc_name(&place), theme().value),
+                    Err(_) => ("Choose disc image...".to_string(), theme().bad),
+                };
+                sdl.write_right(line, &value, colour);
+            }
             Row::SkipLauncher if !status.1 => {
                 // Offered only once the game folder checks out.
                 sdl.write(left, line, "Skip launcher next time", theme().dim);
@@ -1255,10 +1379,10 @@ pub fn snapshot(game: &Game, settings: &Settings) {
         println!("no window for the launcher's picture");
         return;
     };
-    let all = rows(game, false);
+    let all = rows(game, settings, false);
     let start = all.iter().position(|row| *row == Row::Start).unwrap_or(0);
     TAKING_PICTURE.store(true, std::sync::atomic::Ordering::Relaxed);
-    draw(&sdl, game, settings, &folder_status(game, &settings.folder), &None, start, false);
+    draw(&sdl, game, settings, &game_status(game, settings), &None, start, false);
     TAKING_PICTURE.store(false, std::sync::atomic::Ordering::Relaxed);
     unsafe {
         let read = (sdl.read_pixels)(sdl.renderer, std::ptr::null());
@@ -1339,6 +1463,11 @@ fn change(sdl: &Sdl, game: &Game, row: Row, step: i32, settings: &mut Settings, 
         Row::File => {
             let start = dialog_start(&settings.folder);
             unsafe { (sdl.pick_file)(folder_picked, std::ptr::null_mut(), sdl.window, std::ptr::null(), 0, start.as_ptr(), false) };
+        }
+        // The disc image, or any file of a disc mounted or copied to a folder.
+        Row::Disc => {
+            let start = dialog_start(if settings.disc.is_empty() { &settings.folder } else { &settings.disc });
+            unsafe { (sdl.pick_file)(disc_picked, std::ptr::null_mut(), sdl.window, std::ptr::null(), 0, start.as_ptr(), false) };
         }
         Row::Scale if fixed_resolution(game, settings) => {}
         Row::Scale => {
@@ -1478,6 +1607,15 @@ fn hotkey_page(sdl: &Sdl, game: &Game) {
     }
 }
 
+/// The row to select: Start when the game is ready, else the disc's row when the folder
+/// is an installed copy that only lacks its disc, else the folder's.
+fn waiting_row(all: &[Row], status: &(String, bool)) -> usize {
+    if status.1 {
+        return all.iter().position(|row| *row == Row::Start).unwrap_or(0);
+    }
+    all.iter().position(|row| *row == Row::Disc).unwrap_or(0)
+}
+
 pub fn show(game: &Game, mut settings: Settings) -> Outcome {
     let gave_folder = std::env::args().skip(1).any(|argument| !argument.starts_with("--"));
     load(game, &mut settings, gave_folder);
@@ -1490,13 +1628,12 @@ pub fn show(game: &Game, mut settings: Settings) -> Outcome {
     };
     note("window open, checking the game");
     let mut advanced = false;
-    let mut all = rows(game, advanced);
-    let start_row = all.iter().position(|row| *row == Row::Start).unwrap_or(0);
-    let mut status = folder_status(game, &settings.folder);
+    let mut all = rows(game, &settings, advanced);
+    let mut status = game_status(game, &settings);
     note(&status.0);
     let mut warning = folder_warning(&settings.folder);
-    // Start is ready to press, unless the folder needs choosing first.
-    let mut selected = if status.1 { start_row } else { 0 };
+    // Start is ready to press, unless the folder or the disc needs choosing first.
+    let mut selected = waiting_row(&all, &status);
     let mut event = Event([0; 128]);
     let finished = loop {
         let mut result = None;
@@ -1525,8 +1662,8 @@ pub fn show(game: &Game, mut settings: Settings) -> Outcome {
                     BUTTON_SOUTH => Some((None, 0, false)),
                     BUTTON_START => {
                         advanced = false;
-                        all = rows(game, advanced);
-                        selected = start_row;
+                        all = rows(game, &settings, advanced);
+                        selected = all.iter().position(|row| *row == Row::Start).unwrap_or(0);
                         Some((None, 0, false))
                     }
                     BUTTON_EAST => Some((None, 0, true)),
@@ -1564,7 +1701,7 @@ pub fn show(game: &Game, mut settings: Settings) -> Outcome {
             let enter = !advanced && !quit && step == 0 && movement.is_none() && all[selected] == Row::Advanced;
             if leave || enter {
                 advanced = enter;
-                all = rows(game, advanced);
+                all = rows(game, &settings, advanced);
                 selected = if enter { 0 } else { all.iter().position(|row| *row == Row::Advanced).unwrap_or(0) };
                 continue;
             }
@@ -1584,13 +1721,39 @@ pub fn show(game: &Game, mut settings: Settings) -> Outcome {
         if let Some(picked) = PICKED.lock().unwrap().take() {
             note(&format!("picked {picked:?}"));
             settings.folder = game_place(game, &picked);
-            status = folder_status(game, &settings.folder);
+            status = game_status(game, &settings);
             note(&status.0);
             warning = folder_warning(&settings.folder);
             // The folder's row is on the first page.
             advanced = false;
-            all = rows(game, advanced);
-            selected = if status.1 { start_row } else { 0 };
+            all = rows(game, &settings, advanced);
+            selected = waiting_row(&all, &status);
+        }
+        if let Some(picked) = PICKED_DISC.lock().unwrap().take() {
+            note(&format!("picked the disc {picked:?}"));
+            settings.disc = picked;
+            status = game_status(game, &settings);
+            note(&status.0);
+            selected = waiting_row(&all, &status);
+        }
+        // An installed copy's disc image is unpacked before the game starts, as a
+        // chosen disc image is, and the folder it went to is what's remembered.
+        if result == Some(true) && installed(game, &settings.folder) {
+            let unpacked = found_disc(game, &settings.disc).and_then(|place| {
+                if disc::is_image(std::path::Path::new(&place)) {
+                    note("unpacking the installed copy's disc");
+                }
+                loader::disc_folder(game, &place, &mut progress_screen(&sdl, game, "Unpacking the disc"))
+            });
+            match unpacked {
+                Ok(folder) => settings.disc = folder.display().to_string(),
+                Err(problem) => {
+                    note(&problem);
+                    status = (problem, false);
+                    selected = waiting_row(&all, &status);
+                    result = None;
+                }
+            }
         }
         // A disc image is unpacked before the game starts, and the folder it
         // went to is what's remembered. If that fails the launcher stays, with

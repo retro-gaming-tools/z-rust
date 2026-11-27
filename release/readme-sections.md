@@ -2,14 +2,14 @@
 
 ![The launcher](release/launcher.png)
 
-The launcher opens before the game. Your choices are saved in `settings.ini` beside the program (beside the `.AppImage` file on Linux), and `--play` on the command line skips the launcher.
+The launcher opens before the game. Your choices are saved in `z-rust.settings.ini` beside the program (beside the `.AppImage` file on Linux), and `--play` on the command line skips the launcher.
 
 - **Game files**: where your copy of the game is. Click *Choose folder...* or press Enter to pick a folder, or drop a folder or disc image onto the window. The line below it says which version was found, or what's missing.
 - **Choose a disc image or game file**: pick a disc image (`.iso`, `.bin`, `.img`, `.mdf`, `.cue`, `.ccd`) or any file of the game.
 - **Display**: *Window* or *Fullscreen*.
 - **Skip launcher next time**: *On* starts the game straight away from then on. `--launcher` on the command line, or Shift held while the port starts, brings the launcher back.
 - **Hotkeys...**: change the port's own keys (fullscreen, frame counter): choose a row, press the new key; Delete, Backspace or X turns a hotkey off, and *Reset to defaults* brings back F11 and F10.
-- **Advanced settings... > Files kept** (Linux only): *Beside program* (the default: `settings.ini`, `recomp.log` and unpacked discs beside the `.AppImage`) or *Home (XDG)* (`~/.config/z-rust` for the settings, `~/.local/share/z-rust` for the log and unpacked discs, for AppImage managers that keep all AppImages in one folder). `--xdg` on the command line does the same.
+- **Advanced settings... > Files kept** (Linux only): *Beside program* (the default: `z-rust.settings.ini`, `z-rust.log` and unpacked discs beside the `.AppImage`) or *Home (XDG)* (`~/.config/z-rust` for the settings, `~/.local/share/z-rust` for the log and unpacked discs, for AppImage managers that keep all AppImages in one folder). `--xdg` on the command line does the same.
 - **Start game** and **Quit**.
 
 The launcher works with the mouse, the keyboard (arrow keys to choose and change, Enter to confirm, Escape to quit) and a controller (d-pad to choose and change, A to confirm, Start to start the game, B to quit).
@@ -41,13 +41,13 @@ Only the program is checked, not the disc image or the other game files, so any 
 - Windows (PowerShell): `Get-FileHash WINZ.EXE`
 - Windows (Command Prompt): `certutil -hashfile WINZ.EXE SHA256`
 
-The DOS release's `ZED.EXE` is packed inside `Z.PAC`, so it can't be checked this way: pick the disc or its folder in the launcher, which says whether it found a supported version. Either way, `recomp.log`, beside the port's program, lists the value of each program the port checked, `ZED.EXE` inside `Z.PAC` too.
+The DOS release's `ZED.EXE` is packed inside `Z.PAC`, so it can't be checked this way: pick the disc or its folder in the launcher, which says whether it found a supported version. Either way, `z-rust.log`, beside the port's program, lists the value of each program the port checked, `ZED.EXE` inside `Z.PAC` too.
 
 **The Steam release doesn't work with this port**: its program is a different one. Other releases and languages aren't supported either: their programs differ, and the launcher says which version it found, or that it found none.
 
 ## Starting
 
-You don't install the game: its installers don't run on modern systems. In the launcher, pick your disc image or any file of the game in a folder, or drop it on the window. An image is unpacked once into a `game` folder beside the program (`game-zed` for the DOS release), and every later start finds it by itself. A real CD or DVD in a drive works the same way: pick the mounted disc's folder or any file on it. The DOS release gets its CD drive and language switch (`/CD:E /ger` or `/CD:E /eng`) from the port, and needs no sound, video or mouse driver set-up: the port picks the best settings, with SVGA on.
+You don't install the game: its installers don't run on modern systems. In the launcher, pick your disc image or any file of the game in a folder, or drop it on the window. An image is unpacked once into a `game` folder beside the program (`game-zed` for the DOS release), and every later start finds it by itself. A real CD or DVD in a drive works the same way: pick the mounted disc's folder or any file on it. A DOS copy you installed to a hard disk years ago works too, with its options, saves and high scores: pick its folder, and the launcher's CD row asks for its disc (an image, the mounted disc, or a folder of its files), which becomes the game's drive E:. The DOS release gets its CD drive and language switch (`/CD:E /ger` or `/CD:E /eng`) from the port, and needs no sound, video or mouse driver set-up: the port picks the best settings, with SVGA on.
 
 ## What works
 
@@ -64,4 +64,4 @@ You don't install the game: its installers don't run on modern systems. In the l
 - The game is shown at its original resolution (640x480, or 640x400 and 320x200 in DOS), scaled to the window. Larger views of the battlefield are planned.
 - In the Windows release, Alt (or the controller's Back button) opens a menu with **Quit**, for fullscreen, where there's no window to close.
 
-If something doesn't work, please open an issue and attach `recomp.log`, which is beside the program (beside the `.AppImage` file on Linux). After starting again, it's `recomp-previous.log`.
+If something doesn't work, please open an issue and attach `z-rust.log`, which is beside the program (beside the `.AppImage` file on Linux). After starting again, it's `z-rust-previous.log`.

@@ -33,7 +33,8 @@ fn log_after(kind: &str) -> String {
         .unwrap()
         .status;
     assert!(!status.success());
-    let log = std::fs::read_to_string(folder.join("recomp.log")).unwrap();
+    // The child is this same test program, so its log has this program's name.
+    let log = std::fs::read_to_string(folder.join(crate::runlog::file_name())).unwrap();
     let _ = std::fs::remove_dir_all(&folder);
     log
 }

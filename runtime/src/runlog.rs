@@ -1,27 +1,35 @@
-//! `recomp.log`: the launcher's steps, what was started and any crash, for a
-//! player to send. Each line is written at once, so the log still says how far
-//! the launcher got when SDL or a driver kills the program without a panic.
+//! `<program>.log` (such as `z-rust.log`): the launcher's steps, what was started
+//! and any crash, for a player to send. Each line is written at once, so the log
+//! still says how far the launcher got when SDL or a driver kills the program
+//! without a panic. Named after the program, so two ports in one folder keep
+//! their own logs.
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-pub const FILE_NAME: &str = "recomp.log";
-/// The run before's log, so starting again doesn't lose the one to send.
-pub const PREVIOUS_FILE_NAME: &str = "recomp-previous.log";
+/// `<program>.log`.
+pub fn file_name() -> String {
+    format!("{}.log", crate::host::launcher::program_name())
+}
+
+/// The run before's log, `<program>-previous.log`, so starting again doesn't lose the one to send.
+pub fn previous_file_name() -> String {
+    format!("{}-previous.log", crate::host::launcher::program_name())
+}
 
 static LOG: Mutex<Option<std::fs::File>> = Mutex::new(None);
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
 fn open_in(folder: PathBuf) -> Option<(PathBuf, std::fs::File)> {
-    let path = folder.join(FILE_NAME);
+    let path = folder.join(file_name());
     if path.is_file() {
-        let _ = std::fs::rename(&path, folder.join(PREVIOUS_FILE_NAME));
+        let _ = std::fs::rename(&path, folder.join(previous_file_name()));
     }
     std::fs::File::create(&path).ok().map(|file| (path, file))
 }
 
-/// Starts the log beside the program, as `settings.ini` is, else in `fallback`.
+/// Starts the log beside the program, as the settings are, else in `fallback`.
 pub fn start(title: &str, version: &str, fallback: impl FnOnce() -> Option<PathBuf>) {
     let opened = crate::host::launcher::files_folder().and_then(open_in).or_else(|| fallback().and_then(open_in));
     if let Some((path, file)) = opened {

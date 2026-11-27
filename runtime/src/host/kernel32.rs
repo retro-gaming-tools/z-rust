@@ -17,10 +17,14 @@ const FILETIME_1970: u64 = 116_444_736_000_000_000;
 pub(crate) fn host_path(cpu: &Cpu, guest: &str) -> PathBuf {
     // DOS: every drive is the game folder, which holds the disc's files and,
     // beside them, the installed ones (`Z.PAC` unpacked), as their names don't
-    // overlap. A path on the CD drive may also be in the folder above.
+    // overlap. A path on the CD drive may also be in the folder above. An
+    // installed copy has its disc in a folder of its own, which is the CD drive.
     if cpu.host.dos.dos_mode {
         let (drive, path) = cpu.host.dos.absolute(guest);
         let path = path.replace('\\', "/");
+        if let Some(disc) = cpu.host.dos.disc_folder.as_ref().filter(|_| Some(drive) == cpu.host.dos.cd_drive) {
+            return resolve(disc, &path);
+        }
         let found = resolve(&cpu.host.folder, &path);
         if Some(drive) == cpu.host.dos.cd_drive && !found.exists() {
             if let Some(beside) = cpu.host.folder.parent().map(|parent| resolve(parent, &path)).filter(|p| p.exists()) {

@@ -101,6 +101,8 @@ fn report_crashes(title: &'static str) {
 
 #[cfg(test)]
 mod crash_tests;
+#[cfg(test)]
+mod disc_tests;
 
 /// Without a path, the game folder is `game` here or beside the program, or else
 /// this folder or the program's own, for a build copied in with the game's files.
@@ -279,6 +281,73 @@ pub(crate) fn holds_image_version(game: &Game, folder: &str, image: &std::path::
         && holds_disc_files(folder, image)
 }
 
+/// A file only Z's DOS disc has, which the game reads from its CD drive.
+const DISC_DATA: &str = "Z/MAIN.PAC";
+/// Z's DOS program, which `Z.PAC` installs to the hard disk.
+const DOS_PROGRAM: &str = "ZED.EXE";
+
+/// Whether a folder, or the one above it, holds the DOS disc's own files.
+pub(crate) fn holds_disc(folder: &std::path::Path) -> bool {
+    let has = |folder: &std::path::Path| find_file(&folder.to_string_lossy(), DISC_DATA).is_some();
+    folder.is_dir() && (has(folder) || folder.parent().is_some_and(has))
+}
+
+/// Whether a folder that passes its check is a DOS copy installed to a hard disk:
+/// the program, its drivers and `OPTIONS.CFG` from `Z.PAC`, without the disc's files,
+/// which the game reads from its CD drive. It runs with a disc beside it.
+pub(crate) fn installed_without_disc(game: &Game, folder: &str) -> bool {
+    let path = std::path::Path::new(folder);
+    path.is_dir() && !host::disc::is_image(path) && check_files(game, folder).is_ok() && program_in(game, folder)[0].file.eq_ignore_ascii_case(DOS_PROGRAM) && !holds_disc(path)
+}
+
+/// The disc for an installed copy: the one the player chose (a disc image, a mounted
+/// disc, or a folder holding the disc's files), or else a disc unpacked before into a
+/// `game` folder beside the program. A folder the player chose by a file in it counts
+/// as that folder. Gives the place as a folder or a disc image, or why there's none.
+pub(crate) fn disc_for(game: &Game, chosen: &str) -> Result<String, String> {
+    if !chosen.is_empty() {
+        let path = std::path::Path::new(chosen);
+        if host::disc::is_image(path) {
+            return check_image(game, path).map(|_| chosen.to_string()).map_err(|problem| format!("{problem}: {chosen}"));
+        }
+        let folder = if path.is_dir() { path.to_path_buf() } else { path.parent().map(|p| p.to_path_buf()).unwrap_or_default() };
+        if let Some(drive) = disc_drive(&folder) {
+            return Ok(drive.display().to_string());
+        }
+        if holds_disc(&folder) {
+            return Ok(folder.display().to_string());
+        }
+        if let Some(image) = host::disc::image_in(&folder).filter(|image| check_image(game, image).is_ok()) {
+            return Ok(image.display().to_string());
+        }
+        return Err(format!("Not Z's DOS disc: {chosen}"));
+    }
+    let base = host::launcher::files_folder().unwrap_or_default();
+    let mut unpacked: Vec<std::path::PathBuf> = std::fs::read_dir(&base)
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default();
+    unpacked.retain(|folder| folder.file_name().is_some_and(|name| name.to_string_lossy().starts_with("game")) && holds_disc(folder));
+    unpacked.sort();
+    unpacked.first().map(|folder| folder.display().to_string()).ok_or_else(|| "No disc chosen for this installed copy".to_string())
+}
+
+/// The disc's folder for the game's CD drive: a disc image or mounted disc is unpacked
+/// first, as a disc chosen for the game folder is, unless that was done before.
+pub(crate) fn disc_folder(game: &Game, place: &str, progress: &mut dyn FnMut(u64, u64)) -> Result<std::path::PathBuf, String> {
+    let path = std::path::Path::new(place);
+    if !host::disc::is_image(path) {
+        return Ok(path.to_path_buf());
+    }
+    let target = unpack_target(game, path);
+    if !holds_image_version(game, &target.display().to_string(), path) {
+        if target.exists() {
+            return Err(format!("{} is in the way: it holds other files. Move or delete it.", target.display()));
+        }
+        host::disc::unpack(path, &target, progress)?;
+    }
+    Ok(target)
+}
+
 fn holds_disc_files(folder: &str, image: &std::path::Path) -> bool {
     let Ok(mut disc) = host::disc::Disc::open(image) else { return false };
     disc.files().iter().all(|entry| find_file(folder, &entry.path).is_some())
@@ -333,7 +402,7 @@ fn resolve(image: &pe::Image, others: &[(String, pe::Image)], cpu: &mut Cpu, kno
     }
 }
 
-fn start(game: &'static Game, folder: String, switches: Vec<bool>, mods: Vec<bool>, command: &'static str) {
+fn start(game: &'static Game, folder: String, disc: Option<std::path::PathBuf>, switches: Vec<bool>, mods: Vec<bool>, command: &'static str) {
     let table: Vec<(u32, GuestFn)> = game.tables.iter().flat_map(|table| table.iter().copied()).collect();
     let images = load_images(program_in(game, &folder), &folder);
     let mut cpu = Cpu {
@@ -409,7 +478,9 @@ fn start(game: &'static Game, folder: String, switches: Vec<bool>, mods: Vec<boo
         // DOS's start: the PSP, the environment and the selectors, with the
         // program as `Z.BAT` and friends named it.
         let program = format!("C:\\{}", images[0].0.to_uppercase());
-        let arguments = std::env::var("RECOMP_DOS_ARGUMENTS").unwrap_or_else(|_| dos_arguments(&cpu.host.folder.to_string_lossy()));
+        let disc_place = disc.as_ref().unwrap_or(&cpu.host.folder).to_string_lossy().into_owned();
+        let arguments = std::env::var("RECOMP_DOS_ARGUMENTS").unwrap_or_else(|_| dos_arguments(&disc_place));
+        cpu.host.dos.disc_folder = disc;
         crate::runlog::line(&format!("command: {program} {arguments}"));
         host::dos::start(&mut cpu, &images[0].1, &program, &arguments);
     }
@@ -445,6 +516,9 @@ fn dos_arguments(folder: &str) -> String {
 /// What the player chose, on the command line or in the launcher.
 pub struct Settings {
     pub folder: String,
+    /// The disc for an installed DOS copy (a disc image, a mounted disc or a folder),
+    /// or empty: see `disc_for`.
+    pub disc: String,
     /// How many times 640x480 3D is drawn at, from 1 to 6.
     pub scale: u32,
     pub fullscreen: bool,
@@ -486,13 +560,14 @@ fn command_with_choices(game: &Game, settings: &Settings) -> String {
 pub const DEFAULT_SCALE: u32 = 3;
 
 /// Reads `[folder] [--scale=N] [--fullscreen] [--drawing=processor|card] [--renderer=NAME] [--language=NAME] [--mod-off=NAME]
-/// [--mod-on=NAME] [--play] [game switches]`.
+/// [--mod-on=NAME] [--disc=PATH] [--play] [game switches]`.
 fn settings_from_arguments(game: &Game, arguments: &[String]) -> Settings {
     let has = |wanted: &str| arguments.iter().any(|argument| argument.eq_ignore_ascii_case(wanted));
     let scale = arguments.iter().find_map(|argument| argument.strip_prefix("--scale=")?.parse().ok());
     let scale = scale.or_else(|| std::env::var("RECOMP_SCALE").ok()?.parse().ok());
     Settings {
         folder: arguments.iter().find(|argument| !argument.starts_with("--")).cloned().unwrap_or_else(|| default_folder(game)),
+        disc: arguments.iter().find_map(|argument| argument.strip_prefix("--disc=")).unwrap_or_default().to_string(),
         scale: scale.unwrap_or(DEFAULT_SCALE).clamp(1, 6),
         fullscreen: has("--fullscreen"),
         processor: has("--drawing=processor"),
@@ -544,7 +619,7 @@ pub fn run(game: &'static Game) {
         std::env::set_var("RECOMP_GLIDE", "cpu");
     }
     let command: &'static str = Box::leak(command_with_choices(game, &settings).into_boxed_str());
-    let Settings { mut folder, switches, mods, .. } = settings;
+    let Settings { mut folder, disc, switches, mods, .. } = settings;
     // A mounted CD or DVD stands for its drive.
     if let Some(drive) = disc_drive(std::path::Path::new(&folder)) {
         folder = drive.display().to_string();
@@ -588,7 +663,30 @@ pub fn run(game: &'static Game) {
         host::video::show_error(game.title, &text);
         std::process::exit(1);
     }
-    let thread = std::thread::Builder::new().stack_size(HOST_STACK).spawn(move || start(game, folder, switches, mods, command));
+    // An installed DOS copy runs with its disc as the CD drive.
+    let disc = if installed_without_disc(game, &folder) {
+        let found = disc_for(game, &disc).and_then(|place| {
+            if host::disc::is_image(std::path::Path::new(&place)) {
+                println!("unpacking {place}, the disc of the installed copy");
+            }
+            disc_folder(game, &place, &mut |_, _| {})
+        });
+        match found {
+            Ok(disc) => {
+                crate::runlog::line(&format!("disc folder: {}", disc.display()));
+                Some(disc)
+            }
+            Err(problem) => {
+                let text = format!("{folder} is a copy of {} installed to a hard disk, and the game reads the rest from its disc.\n\n{problem}.\n\nChoose the disc in the launcher's CD row: a disc image, the mounted disc, or a folder of its files.", game.title);
+                crate::runlog::line(&text);
+                host::video::show_error(game.title, &text);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+    let thread = std::thread::Builder::new().stack_size(HOST_STACK).spawn(move || start(game, folder, disc, switches, mods, command));
     if thread.expect("couldn't start the game's thread").join().is_err() {
         std::process::exit(1);
     }

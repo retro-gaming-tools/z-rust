@@ -2,6 +2,11 @@
 
 Newest first. Each version has a tag `v<version>`, and `./changes.sh <old> <new>` shows the full diff between two of them.
 
+## 0.62-beta (2026-11-27)
+
+- An installed DOS copy works with its disc: the launcher shows a CD row for it, where you choose the disc (an image, a drive or a folder). The game sees the installed folder as C: and the disc as E:.
+- The settings and the log are named after the program (`z-rust.settings.ini`, `z-rust.log`), so two ports in one folder keep their own. Settings saved by earlier versions in `settings.ini` are still read.
+
 ## 0.61-beta (2026-11-26)
 
 - The README lists each supported release (system, language) with the full SHA-256 of its program, and how to check your own copy. Any dump of a supported disc works: only the program file is checked, not the disc image. `recomp.log` records the program's SHA-256.
